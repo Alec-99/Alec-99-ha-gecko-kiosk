@@ -1,0 +1,303 @@
+camera:
+  name: Camera bedienen
+  description: Bedien de native cameralaag van een Gecko-kiosk.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+    action:
+      name: Actie
+      required: true
+      selector:
+        select:
+          options:
+            - prewarm
+            - show
+            - hide
+            - stop
+    camera:
+      name: Camera-ID
+      required: false
+      default: doorbell
+      selector:
+        text:
+device:
+  name: Kiosk bedienen
+  description: Stuur een toegelaten apparaatopdracht naar de Gecko-kiosk.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+    command:
+      name: Opdracht
+      required: true
+      selector:
+        select:
+          options:
+            - screen
+            - screensaver
+            - brightness
+            - volume
+            - mute
+            - reload_dashboard
+    value:
+      name: Waarde
+      description: ON/OFF, een percentage 0-100 of 'reload' voor dashboardverversing.
+      required: true
+      selector:
+        text:
+popup:
+  name: Popup tonen
+  description: Toon een configureerbaar venster of een camera op een specifieke kiosk.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      description: Doeltoestel, bijvoorbeeld sm_t580_panel.
+      required: true
+      selector:
+        text:
+    kind:
+      name: Type
+      description: Bevestiging, bericht of camerabeeld.
+      required: true
+      selector:
+        select:
+          options:
+            - value: confirmation
+              label: Bevestiging
+            - value: message
+              label: Bericht
+            - value: camera
+              label: Camera
+    popup_name:
+      name: Naam
+      description: Herkenbare naam voor de bevestigingsautomatisering.
+      required: false
+      default: custom
+      selector:
+        text:
+    title:
+      name: Titel
+      required: false
+      selector:
+        text:
+    message:
+      name: Bericht
+      required: false
+      selector:
+        text:
+          multiline: true
+    confirm_label:
+      name: Bevestigingsknop
+      required: false
+      default: Bevestigen
+      selector:
+        text:
+    cancel_label:
+      name: Annuleerknop
+      required: false
+      default: Annuleren
+      selector:
+        text:
+    camera:
+      name: Camera-ID
+      description: Camera uit de lokale tabletconfiguratie.
+      required: false
+      default: doorbell
+      selector:
+        text:
+notification:
+  name: Screensavermelding
+  description: Stuur een tijdelijke melding naar de schermbeveiliging van een kiosk.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      description: Doeltoestel, bijvoorbeeld sm_t580_panel.
+      required: true
+      selector:
+        text:
+    action:
+      name: Actie
+      description: Een melding tonen of verwijderen.
+      required: false
+      default: show
+      selector:
+        select:
+          options:
+            - value: show
+              label: Tonen
+            - value: clear
+              label: Wissen
+    notification_id:
+      name: Meldings-ID
+      description: Optionele vaste ID om een melding te vervangen of gericht te wissen.
+      required: false
+      selector:
+        text:
+    level:
+      name: Prioriteit
+      required: false
+      default: warning
+      selector:
+        select:
+          options:
+            - value: info
+              label: Informatie
+            - value: warning
+              label: Waarschuwing
+            - value: critical
+              label: Kritiek
+    title:
+      name: Titel
+      required: false
+      selector:
+        text:
+    message:
+      name: Bericht
+      description: Tekst die op de tablet wordt getoond (maximaal 300 tekens).
+      required: false
+      selector:
+        text:
+          multiline: true
+    duration_seconds:
+      name: Duur in seconden
+      required: false
+      default: 60
+      selector:
+        number:
+          min: 5
+          max: 600
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    show_screensaver:
+      name: Screensaver direct activeren
+      description: Toon direct de screensaver indien mogelijk; een actieve camera krijgt voorrang.
+      required: false
+      default: false
+      selector:
+        boolean:
+
+set_screensaver:
+  name: Screensaver instellen
+  description: Pas native screensaverinstellingen meteen toe en bewaar ze op de tablet.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+    enabled:
+      name: Screensaver actief
+      selector:
+        boolean:
+    inactivity_timeout_seconds:
+      name: Wachttijd (seconden)
+      selector:
+        number:
+          min: 5
+          max: 86400
+          mode: box
+    show_clock:
+      name: Klok tonen
+      selector:
+        boolean:
+    show_date:
+      name: Datum tonen
+      selector:
+        boolean:
+    consume_wake_touch:
+      name: Eerste tik alleen wakker maken
+      selector:
+        boolean:
+    clock_text_size_sp:
+      name: Klokgrootte (sp)
+      selector:
+        number:
+          min: 12
+          max: 200
+          mode: box
+    date_text_size_sp:
+      name: Datumgrootte (sp)
+      selector:
+        number:
+          min: 10
+          max: 100
+          mode: box
+    clock_update_interval_seconds:
+      name: Klokverversing (seconden)
+      selector:
+        number:
+          min: 1
+          max: 3600
+          mode: box
+    background_color:
+      name: Achtergrondkleur (#RRGGBB)
+      selector:
+        text:
+    text_color:
+      name: Tekstkleur (#RRGGBB)
+      selector:
+        text:
+set_camera_popup:
+  name: Camera-popup instellen
+  description: Wijzig live de afmetingen en achtergrondverduistering van de native cameraweergave.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+    width_percent:
+      name: Breedte (% scherm)
+      selector:
+        number:
+          min: 40
+          max: 100
+          mode: slider
+    height_percent:
+      name: Hoogte (% scherm)
+      selector:
+        number:
+          min: 40
+          max: 100
+          mode: slider
+    dim_percent:
+      name: Verduistering (%)
+      selector:
+        number:
+          min: 0
+          max: 95
+          mode: slider
+get_settings:
+  name: Instellingen ophalen
+  description: Vraag de effectieve tabletinstellingen opnieuw op; ze verschijnen in het Gecko-beheerpaneel.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+reset_settings:
+  name: Instellingen herstellen
+  description: Verwijder alleen voor de gekozen groep de externe overrides op de tablet.
+  fields:
+    kiosk:
+      name: Kiosk-ID
+      required: true
+      selector:
+        text:
+    section:
+      name: Groep
+      required: true
+      selector:
+        select:
+          options:
+            - value: screensaver
+              label: Screensaver
+            - value: camera_popup
+              label: Camera-popup

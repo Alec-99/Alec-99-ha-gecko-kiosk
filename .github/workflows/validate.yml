@@ -1,0 +1,33 @@
+name: Validate public HA integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Check Python, manifests and protocol contracts
+        run: |
+          python -m compileall -q custom_components/ha_gecko_kiosk
+          python -m json.tool custom_components/ha_gecko_kiosk/manifest.json >/dev/null
+          python -m json.tool hacs.json >/dev/null
+          python -m json.tool custom_components/ha_gecko_kiosk/strings.json >/dev/null
+          python -m json.tool custom_components/ha_gecko_kiosk/translations/nl.json >/dev/null
+          python -m json.tool custom_components/ha_gecko_kiosk/translations/en.json >/dev/null
+          python -m unittest discover -s tests/ha_gecko_kiosk -p 'test_*.py' -v
+      - name: Validate public source policy
+        run: python scripts/check_public_snapshot.py
+      - name: Validate frontend syntax
+        run: |
+          node --check custom_components/ha_gecko_kiosk/frontend/ha-gecko-kiosk-panel.js
+          node --check custom_components/ha_gecko_kiosk/frontend/ha-gecko-preload.js

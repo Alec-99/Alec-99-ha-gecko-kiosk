@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HA Gecko Kiosk instellen",
+        "description": "Deze integratie beheert tablets via de bestaande MQTT-integratie van Home Assistant. Verbind de tablets eerst met dezelfde broker."
+      }
+    },
+    "abort": {
+      "already_configured": "HA Gecko Kiosk is al ingesteld."
+    }
+  }
+}

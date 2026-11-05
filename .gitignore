@@ -1,0 +1,24 @@
+# Never add actual HA/Android device configs or credentials
+.env
+.env.*
+secrets.yaml
+configuration.yaml
+config.json
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+*.apk
+*.aab
+*.log
+*.zip
+*.tar
+*.tar.gz
+__pycache__/
+.pytest_cache/
+.venv/
+.idea/
+local.properties
+**/build/
+*.pyc
