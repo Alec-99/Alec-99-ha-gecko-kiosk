@@ -14,7 +14,7 @@ forbidden = ("baseline/", "downloads/", "reference/", "docs/project-memory/", "d
 allowed_suffixes = {".py", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".xml"}
 problems = []
 for path in root.rglob("*"):
-    if not path.is_file() or ".git" in path.parts:
+    if not path.is_file() or ".git" in path.parts or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
         continue
     rel = path.relative_to(root).as_posix()
     if rel.startswith(forbidden):
