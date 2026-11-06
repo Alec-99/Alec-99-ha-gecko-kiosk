@@ -57,6 +57,8 @@ New protocol behavior must first land with contract tests for both an Android Ge
 
 Full Gecko profile:
 
+The canonical copy used by contract tests is `docs/fixtures/capability_manifest_v1.json`; the private app repository keeps an identical test resource and verifies its generated manifest against it. The fixture uses synthetic camera IDs only.
+
 ```json
 {"schema":1,"protocol_version":1,"capabilities":["audio.mute","audio.volume","camera.external","camera.popup_settings","dashboard.reload","diagnostics.basic","display.brightness","display.power","notification.display","popup.confirmation","popup.message","screensaver.activate","screensaver.settings"],"resources":{"cameras":["entry_cam","yard"]}}
 ```
@@ -66,3 +68,5 @@ Small display profile (suitable as a synthetic constrained-device test):
 ```json
 {"schema":1,"protocol_version":1,"capabilities":["diagnostics.basic","display.power"]}
 ```
+
+The Gecko app's brightness command accepts 1–100 percent; media volume accepts 0–100 percent. Constrained devices may define their own supported capability subset, but the v1 Gecko mapping keeps these established ranges.

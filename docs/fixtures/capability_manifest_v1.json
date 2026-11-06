@@ -1,0 +1,1 @@
+{"schema":1,"protocol_version":1,"capabilities":["audio.mute","audio.volume","camera.external","camera.popup_settings","dashboard.reload","diagnostics.basic","display.brightness","display.power","notification.display","popup.confirmation","popup.message","screensaver.activate","screensaver.settings"],"resources":{"cameras":["entry_cam","yard"]}}

@@ -64,6 +64,7 @@ def install_stubs():
 
 mqtt_stub = install_stubs()
 path = Path(__file__).resolve().parents[2] / "custom_components/ha_gecko_kiosk/__init__.py"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("kiosk_protocol_tested", path)
 kiosk = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kiosk)
@@ -203,6 +204,16 @@ class ProtocolTest(unittest.TestCase):
         )
         self.assertEqual(["entry_cam", "yard"], manifest["resources"]["cameras"])
 
+    def test_shared_gecko_manifest_fixture_is_accepted_by_the_ha_contract(self):
+        fixture = (REPO_ROOT / "docs/fixtures/capability_manifest_v1.json").read_text(encoding="utf-8")
+        kiosk._handle_status(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/status/capabilities", payload=fixture,
+        ))
+        manifest = kiosk._ensure_kiosk(self.hass, "tablet_a")["capabilities"]
+        self.assertTrue(manifest["compatible"])
+        self.assertIn("display.brightness", manifest["capabilities"])
+        self.assertEqual(["entry_cam", "yard"], manifest["resources"]["cameras"])
+
     def test_display_and_audio_state_topics_are_kept_separate_and_bounded(self):
         for topic, payload in (
             ("ha_kiosk/tablet_a/display/power", "ON"),
@@ -240,6 +251,25 @@ class ProtocolTest(unittest.TestCase):
             "kiosk": "tablet_a", "command": "screen", "value": "ON",
         })))
         self.assertEqual("ha_kiosk/tablet_a/command/device/screen", self.hass.publishes[-1][0])
+
+    def test_brightness_and_volume_follow_the_documented_ranges(self):
+        kiosk._handle_status(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/status/capabilities",
+            payload=json.dumps({"schema": 1, "protocol_version": 1,
+                               "capabilities": ["display.brightness", "audio.volume"]}),
+        ))
+        with self.assertRaises(kiosk.vol.Invalid):
+            asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+                "kiosk": "tablet_a", "command": "brightness", "value": "0",
+            })))
+        asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+            "kiosk": "tablet_a", "command": "brightness", "value": "1",
+        })))
+        asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+            "kiosk": "tablet_a", "command": "volume", "value": "0",
+        })))
+        self.assertEqual(1, self.hass.publishes[-2][1])
+        self.assertEqual(0, self.hass.publishes[-1][1])
 
     def test_invalid_or_unsupported_capability_manifest_fails_closed(self):
         for payload in (

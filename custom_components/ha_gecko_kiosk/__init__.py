@@ -375,8 +375,10 @@ async def _service_device(hass: HomeAssistant, call: ServiceCall) -> None:
         try:
             percent = int(value)
         except ValueError as error:
-            raise vol.Invalid("Value must be an integer from 0 to 100") from error
-        if not 0 <= percent <= 100:
+            minimum = 1 if command == "brightness" else 0
+            raise vol.Invalid(f"Value must be an integer from {minimum} to 100") from error
+        minimum = 1 if command == "brightness" else 0
+        if not minimum <= percent <= 100:
             raise vol.Invalid("Percentage out of range")
         payload = str(percent)
     elif command == "reload_dashboard":

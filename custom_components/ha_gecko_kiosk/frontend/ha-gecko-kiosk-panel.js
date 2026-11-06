@@ -81,7 +81,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     if (this._supports(kiosk, "display.power")) groups.push(`
       <div class="control-group"><h3><ha-icon icon="mdi:monitor"></ha-icon> Scherm</h3><p class="muted">Status: ${this._escape(display.power ?? "onbekend")}${display.power_state_detail ? ` · ${this._escape(display.power_state_detail)}` : ""}</p><div class="actions"><button data-action="device" data-command="screen" data-value="ON">Inschakelen</button><button class="secondary" data-action="device" data-command="screen" data-value="OFF" ${powerOffUnavailable ? "disabled title=\"Scherm uitschakelen vereist apparaatbeheer\"" : ""}>Uitschakelen</button></div>${powerOffUnavailable ? `<p class="muted" role="status">Uitschakelen vereist apparaatbeheer op de kiosk.</p>` : ""}</div>`);
     if (this._supports(kiosk, "display.brightness")) groups.push(`
-      <div class="control-group"><h3><ha-icon icon="mdi:brightness-6"></ha-icon> Helderheid</h3>${this._controlRange(kiosk, "display", "brightness_percent", "Helderheid (%)", display.brightness_percent)}<button data-action="control" data-command="brightness" data-target="display:brightness_percent">Helderheid toepassen</button></div>`);
+      <div class="control-group"><h3><ha-icon icon="mdi:brightness-6"></ha-icon> Helderheid</h3>${this._controlRange(kiosk, "display", "brightness_percent", "Helderheid (%)", display.brightness_percent, 1)}<button data-action="control" data-command="brightness" data-target="display:brightness_percent">Helderheid toepassen</button></div>`);
     if (this._supports(kiosk, "audio.volume") || this._supports(kiosk, "audio.mute")) groups.push(`
       <div class="control-group"><h3><ha-icon icon="mdi:volume-high"></ha-icon> Audio</h3>${this._supports(kiosk, "audio.volume") ? `${this._controlRange(kiosk, "audio", "volume_percent", "Volume (%)", audio.volume_percent)}<button data-action="control" data-command="volume" data-target="audio:volume_percent">Volume toepassen</button>` : ""}${this._supports(kiosk, "audio.mute") ? `<button class="secondary" data-action="device" data-command="mute" data-value="${this._isTrue(audio.muted) ? "OFF" : "ON"}">${this._isTrue(audio.muted) ? "Geluid inschakelen" : "Dempen"}</button>` : ""}</div>`);
     if (this._supports(kiosk, "dashboard.reload")) groups.push(`
@@ -99,12 +99,12 @@ class HaGeckoKioskPanel extends HTMLElement {
     return `<p class="muted" role="status">Dit apparaat heeft geen bedienbare capabilities opgegeven.</p>`;
   }
 
-  _controlRange(kiosk, section, key, label, value) {
+  _controlRange(kiosk, section, key, label, value, minimum = 0) {
     const draftKey = `${kiosk.id}:${section}:${key}`;
     const parsed = Number(value);
-    const serverValue = Number.isFinite(parsed) ? String(Math.max(0, Math.min(100, parsed))) : "";
+    const serverValue = Number.isFinite(parsed) ? String(Math.max(minimum, Math.min(100, parsed))) : "";
     const current = this._drafts.has(draftKey) ? this._drafts.get(draftKey) : serverValue;
-    return `<label class="field range-field"><span>${label}<output>${this._escape(current || "—")}</output></span><input type="range" min="0" max="100" step="1" value="${this._escape(current)}" aria-label="${label}" data-control-section="${section}" data-control-key="${key}" data-control-kiosk="${this._escape(kiosk.id)}" data-server-value="${this._escape(JSON.stringify(serverValue))}"></label>`;
+    return `<label class="field range-field"><span>${label}<output>${this._escape(current || "—")}</output></span><input type="range" min="${minimum}" max="100" step="1" value="${this._escape(current)}" aria-label="${label}" data-control-section="${section}" data-control-key="${key}" data-control-kiosk="${this._escape(kiosk.id)}" data-server-value="${this._escape(JSON.stringify(serverValue))}"></label>`;
   }
 
   _settingsStatusText(kiosk) {
@@ -357,7 +357,7 @@ class HaGeckoKioskPanel extends HTMLElement {
       const [section, key] = button.dataset.target.split(":");
       const input = [...this.shadowRoot.querySelectorAll("[data-control-kiosk]")].find(item =>
         item.dataset.controlKiosk === kiosk && item.dataset.controlSection === section && item.dataset.controlKey === key);
-      if (!input || !/^\d{1,3}$/.test(input.value) || Number(input.value) > 100) return;
+      if (!input || !/^\d{1,3}$/.test(input.value) || Number(input.value) < Number(input.min) || Number(input.value) > 100) return;
       await this._call("device",{kiosk,command:button.dataset.command,value:input.value},button.dataset.command === "brightness" ? "Helderheid verzonden." : "Volume verzonden.");return;
     }
     if(action==="camera"){await this._call("camera",{kiosk,action:button.dataset.value,camera:button.dataset.camera||"doorbell"},"Cameraopdracht verzonden.");return;}

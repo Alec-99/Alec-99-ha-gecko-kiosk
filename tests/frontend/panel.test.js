@@ -144,6 +144,8 @@ test('generic display and audio capabilities expose controls, honor readiness an
   assert.ok(panel.shadowRoot.querySelector('[data-action="device"][data-command="screen"][data-value="ON"]'));
   assert.equal(panel.shadowRoot.querySelector('[data-action="device"][data-command="screen"][data-value="OFF"]').disabled, true);
   assert.equal(panel.shadowRoot.querySelectorAll('[data-control-key]').length, 2);
+  assert.equal(panel.shadowRoot.querySelector('[data-control-key="brightness_percent"]').min, '1');
+  assert.equal(panel.shadowRoot.querySelector('[data-control-key="volume_percent"]').min, '0');
   assert.ok(panel.shadowRoot.querySelector('[data-command="reload_dashboard"]'));
   assert.equal(panel.shadowRoot.querySelector('[data-command="mute"]').dataset.value, 'ON');
   device.audio.muted = 'ON'; panel._render();
