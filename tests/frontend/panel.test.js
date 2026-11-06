@@ -15,6 +15,7 @@ function kiosk(id, availability = 'online', capabilities) {
     status: { camera_state: 'hidden' },
     display: { power: 'ON', brightness_percent: '62', power_control_ready: 'false' },
     audio: { volume_percent: '31', muted: 'false' },
+    diagnostics: { app_version: '1.2.3', watchdog_status: 'healthy', watchdog_restart_count: '2', mqtt_reconnect_count: '1' },
     battery: { level: 87, charging: false, temperature: 29 },
     settings: {
       screensaver: {
@@ -89,6 +90,9 @@ test('navigation exposes distinct overview, controls, settings and diagnostics s
   assert.match(panel.shadowRoot.textContent, /Camera-popup/);
   await click('[data-tab="diagnostics"]');
   assert.match(panel.shadowRoot.textContent, /Batterijtemperatuur/);
+  assert.match(panel.shadowRoot.textContent, /1\.2\.3/);
+  assert.match(panel.shadowRoot.textContent, /healthy/);
+  assert.match(panel.shadowRoot.textContent, /MQTT-reconnects/);
   assert.equal(panel.shadowRoot.querySelector('[aria-current="page"]').dataset.tab, 'diagnostics');
 });
 

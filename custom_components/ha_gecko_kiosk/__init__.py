@@ -137,6 +137,7 @@ def _ensure_kiosk(hass: HomeAssistant, kiosk_id: str) -> dict[str, Any]:
             "battery": {},
             "display": {},
             "audio": {},
+            "diagnostics": {},
         },
     )
 
@@ -212,6 +213,26 @@ def _handle_device_response(hass: HomeAssistant, message: mqtt.ReceiveMessage) -
         "status": status,
         "detail": str(payload.get("detail", ""))[:200],
     }
+
+
+@callback
+def _handle_diagnostic_state(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
+    """Keep only low-sensitivity, generic diagnostic values for the admin panel."""
+    parts = _topic_parts(message)
+    if len(parts) != 4 or parts[0] != TOPIC_PREFIX:
+        return
+    allowed = {
+        ("app", "version"),
+        ("mqtt", "reconnect_count"),
+        ("watchdog", "status"),
+        ("watchdog", "restart_count"),
+    }
+    if (parts[2], parts[3]) not in allowed:
+        return
+    value = str(message.payload).strip()
+    if len(value) > 128:
+        return
+    _ensure_kiosk(hass, parts[1])["diagnostics"][f"{parts[2]}_{parts[3]}"] = value
 
 
 def _parse_capability_manifest(payload: str) -> dict[str, Any]:
@@ -684,6 +705,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             qos=1,
         )
     )
+    for suffix in ("app/version", "mqtt/reconnect_count", "watchdog/status", "watchdog/restart_count"):
+        unsubs.append(
+            await mqtt.async_subscribe(
+                hass,
+                f"{TOPIC_PREFIX}/+/{suffix}",
+                lambda msg: _handle_diagnostic_state(hass, msg),
+                qos=1,
+            )
+        )
 
     unsubs.append(
         await mqtt.async_subscribe(

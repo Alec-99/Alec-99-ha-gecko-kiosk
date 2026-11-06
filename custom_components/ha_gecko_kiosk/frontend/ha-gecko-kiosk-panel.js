@@ -233,7 +233,7 @@ class HaGeckoKioskPanel extends HTMLElement {
 
   _diagnostics(kiosk) {
     if (!kiosk) return `<p class="muted">Selecteer een kiosk om diagnostiek te bekijken.</p>`;
-    const battery = kiosk.battery || {}, status = kiosk.status || {};
+    const battery = kiosk.battery || {}, status = kiosk.status || {}, diagnostics = kiosk.diagnostics || {};
     const manifest = kiosk.capabilities;
     const capabilityNames = Array.isArray(manifest?.capabilities) ? manifest.capabilities : [];
     const capabilityText = manifest == null ? "Legacy (geen manifest)"
@@ -247,6 +247,10 @@ class HaGeckoKioskPanel extends HTMLElement {
       <dt>Power-bediening gereed</dt><dd>${this._escape(kiosk.display?.power_control_ready ?? "—")}</dd>
       <dt>Volume</dt><dd>${this._escape(kiosk.audio?.volume_percent ?? "—")}${kiosk.audio?.volume_percent == null ? "" : "%"}</dd>
       <dt>Gedempt</dt><dd>${this._escape(kiosk.audio?.muted ?? "—")}</dd>
+      <dt>App-versie</dt><dd>${this._escape(diagnostics.app_version ?? "—")}</dd>
+      <dt>Watchdog</dt><dd>${this._escape(diagnostics.watchdog_status ?? "—")}</dd>
+      <dt>Watchdog-herstarts</dt><dd>${this._escape(diagnostics.watchdog_restart_count ?? "—")}</dd>
+      <dt>MQTT-reconnects</dt><dd>${this._escape(diagnostics.mqtt_reconnect_count ?? "—")}</dd>
       <dt>Laatste bediening</dt><dd role="status">${this._escape(this._deviceCommandStatusText(kiosk))}</dd>
       <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
       <dt>Opladen</dt><dd>${this._chargingText(battery.charging)}</dd>

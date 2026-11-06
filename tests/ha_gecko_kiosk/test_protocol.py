@@ -235,6 +235,25 @@ class ProtocolTest(unittest.TestCase):
         self.assertNotIn("unexpected", state["display"])
         self.assertEqual("ON", state["display"]["power"])
 
+    def test_diagnostics_allowlist_excludes_network_identity_and_unbounded_values(self):
+        for topic, payload in (
+            ("ha_kiosk/tablet_a/app/version", "1.2.3"),
+            ("ha_kiosk/tablet_a/watchdog/status", "healthy"),
+            ("ha_kiosk/tablet_a/watchdog/restart_count", "2"),
+            ("ha_kiosk/tablet_a/mqtt/reconnect_count", "1"),
+            ("ha_kiosk/tablet_a/network/ip", "192.0.2.10"),
+            ("ha_kiosk/tablet_a/watchdog/last_restart_reason", "private detail"),
+        ):
+            kiosk._handle_diagnostic_state(self.hass, types.SimpleNamespace(topic=topic, payload=payload))
+        diagnostics = kiosk._ensure_kiosk(self.hass, "tablet_a")["diagnostics"]
+        self.assertEqual("1.2.3", diagnostics["app_version"])
+        self.assertEqual("healthy", diagnostics["watchdog_status"])
+        self.assertNotIn("network_ip", diagnostics)
+        self.assertNotIn("watchdog_last_restart_reason", diagnostics)
+        kiosk._handle_diagnostic_state(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/app/version", payload="x" * 129))
+        self.assertEqual("1.2.3", diagnostics["app_version"])
+
     def test_screen_power_off_fails_closed_when_device_admin_is_not_ready(self):
         kiosk._handle_status(self.hass, types.SimpleNamespace(
             topic="ha_kiosk/tablet_a/status/capabilities",
