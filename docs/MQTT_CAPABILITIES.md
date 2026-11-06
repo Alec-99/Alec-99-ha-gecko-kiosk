@@ -42,6 +42,7 @@ The current integration supports schema 1 and protocol major 1. A malformed mani
 | `display.brightness` | Change display brightness | `ha_gecko_kiosk.device`, `command: brightness` |
 | `audio.volume` | Change media volume | `ha_gecko_kiosk.device`, `command: volume` |
 | `audio.mute` | Mute/unmute media | `ha_gecko_kiosk.device`, `command: mute` |
+| `command.acknowledged` | Accept expiring device command requests and publish correlated outcomes | `command/device/request` → `device/response` |
 | `dashboard.reload` | Reload the hosted dashboard | `ha_gecko_kiosk.device`, `command: reload_dashboard` |
 | `diagnostics.basic` | Publish generic health and connectivity status | Status/diagnostics only |
 
@@ -60,7 +61,7 @@ Full Gecko profile:
 The canonical copy used by contract tests is `docs/fixtures/capability_manifest_v1.json`; the private app repository keeps an identical test resource and verifies its generated manifest against it. The fixture uses synthetic camera IDs only.
 
 ```json
-{"schema":1,"protocol_version":1,"capabilities":["audio.mute","audio.volume","camera.external","camera.popup_settings","dashboard.reload","diagnostics.basic","display.brightness","display.power","notification.display","popup.confirmation","popup.message","screensaver.activate","screensaver.settings"],"resources":{"cameras":["entry_cam","yard"]}}
+{"schema":1,"protocol_version":1,"capabilities":["audio.mute","audio.volume","camera.external","camera.popup_settings","command.acknowledged","dashboard.reload","diagnostics.basic","display.brightness","display.power","notification.display","popup.confirmation","popup.message","screensaver.activate","screensaver.settings"],"resources":{"cameras":["entry_cam","yard"]}}
 ```
 
 Small display profile (suitable as a synthetic constrained-device test):
@@ -70,3 +71,13 @@ Small display profile (suitable as a synthetic constrained-device test):
 ```
 
 The Gecko app's brightness command accepts 1–100 percent; media volume accepts 0–100 percent. Constrained devices may define their own supported capability subset, but the v1 Gecko mapping keeps these established ranges.
+
+## Acknowledged device commands
+
+Clients that advertise `command.acknowledged` accept non-retained QoS 1 JSON on `ha_kiosk/<device_id>/command/device/request`:
+
+```json
+{"schema":1,"request_id":"0123456789abcdef0123456789abcdef","expires_at_ms":1794000060000,"command":"brightness","value":"62"}
+```
+
+The app rejects expired or unsupported requests and publishes a non-retained QoS 1 response on `ha_kiosk/<device_id>/device/response` with the same request ID and one of `applied`, `rejected`, `unsupported`, `unavailable`, `expired` or `error`. The integration accepts a response only for an outstanding request sent to the same device; unmatched and late responses are ignored. Its panel reports a 65-second timeout. Clients without this capability continue to receive the original individual command topic and payload, so rollout does not break existing Gecko clients.

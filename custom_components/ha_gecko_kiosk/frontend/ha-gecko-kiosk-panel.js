@@ -121,6 +121,28 @@ class HaGeckoKioskPanel extends HTMLElement {
     return "Nog geen configuratieantwoord ontvangen";
   }
 
+  _deviceCommandStatusText(kiosk) {
+    const request = kiosk.last_device_request;
+    const response = kiosk.last_device_response;
+    if (!request) return "Geen recente opdrachtbevestiging";
+    if (response?.request_id !== request) {
+      const requestedAt = Number(kiosk.last_device_request_at_ms) || Date.now();
+      return Date.now() - requestedAt > 65_000
+        ? "Geen tabletbevestiging ontvangen (time-out na 65 seconden)"
+        : "Opdracht verzonden; wachten op tabletbevestiging";
+    }
+    const labels = {
+      applied: "Bevestigd door de tablet",
+      rejected: "Geweigerd door de tablet",
+      unsupported: "Niet ondersteund door de tablet",
+      unavailable: "Tijdelijk niet beschikbaar op de tablet",
+      expired: "Verlopen voordat de tablet de opdracht uitvoerde",
+      error: "Fout tijdens uitvoering op de tablet",
+    };
+    const label = labels[response.status] || "Onbekende tabletrespons";
+    return response.detail ? `${label}: ${response.detail}` : label;
+  }
+
   _captureState() {
     const active = this.shadowRoot.activeElement;
     const focus = active?.dataset?.focusKey;
@@ -225,6 +247,7 @@ class HaGeckoKioskPanel extends HTMLElement {
       <dt>Power-bediening gereed</dt><dd>${this._escape(kiosk.display?.power_control_ready ?? "—")}</dd>
       <dt>Volume</dt><dd>${this._escape(kiosk.audio?.volume_percent ?? "—")}${kiosk.audio?.volume_percent == null ? "" : "%"}</dd>
       <dt>Gedempt</dt><dd>${this._escape(kiosk.audio?.muted ?? "—")}</dd>
+      <dt>Laatste bediening</dt><dd role="status">${this._escape(this._deviceCommandStatusText(kiosk))}</dd>
       <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
       <dt>Opladen</dt><dd>${this._chargingText(battery.charging)}</dd>
       <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>

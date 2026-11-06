@@ -181,6 +181,39 @@ def _handle_device_state(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> N
     _ensure_kiosk(hass, parts[1])[parts[2]][parts[3]] = value
 
 
+@callback
+def _handle_device_response(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
+    """Accept only a live response correlated to a command sent to this kiosk."""
+    parts = _topic_parts(message)
+    if len(parts) != 4 or parts[0] != TOPIC_PREFIX or parts[2:] != ["device", "response"]:
+        return
+    if not isinstance(message.payload, str) or len(message.payload) > 4096:
+        return
+    try:
+        payload = json.loads(message.payload)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(payload, dict) or type(payload.get("schema")) is not int or payload["schema"] != 1:
+        return
+    request_id = payload.get("request_id")
+    status = payload.get("status")
+    if (not isinstance(request_id, str) or not re.fullmatch(r"[0-9a-f]{32}", request_id)
+            or not isinstance(status, str)
+            or status not in {"applied", "rejected", "unsupported", "unavailable", "expired", "error"}):
+        return
+    pending = hass.data.get(DOMAIN, {}).get("pending_device_commands", {})
+    request = pending.get(request_id)
+    if request is None or request["kiosk"] != parts[1] or request["expires"] < time.monotonic():
+        return
+    pending.pop(request_id, None)
+    state = _ensure_kiosk(hass, parts[1])
+    state["last_device_response"] = {
+        "request_id": request_id,
+        "status": status,
+        "detail": str(payload.get("detail", ""))[:200],
+    }
+
+
 def _parse_capability_manifest(payload: str) -> dict[str, Any]:
     """Validate the versioned manifest and fail closed for declared bad data."""
     invalid = {"compatible": False, "protocol_version": None, "capabilities": []}
@@ -401,6 +434,35 @@ async def _service_device(hass: HomeAssistant, call: ServiceCall) -> None:
         readiness = _state(hass).get(kiosk, {}).get("display", {}).get("power_control_ready")
         if readiness is not None and readiness.lower() in ("false", "off", "0", "no"):
             raise vol.Invalid("Display power-off is unavailable until device-admin access is enabled")
+    state = _state(hass).get(kiosk, {})
+    manifest = state.get("capabilities")
+    if manifest and manifest.get("compatible") and "command.acknowledged" in manifest["capabilities"]:
+        request_id = uuid4().hex
+        request_body = {
+            "schema": 1,
+            "request_id": request_id,
+            "expires_at_ms": int(time.time() * 1000) + 60_000,
+            "command": command,
+            "value": payload,
+        }
+        pending = hass.data[DOMAIN].setdefault("pending_device_commands", {})
+        now = time.monotonic()
+        for old_id, request in list(pending.items()):
+            if request["expires"] < now:
+                pending.pop(old_id, None)
+        pending[request_id] = {"kiosk": kiosk, "expires": now + 65}
+        state = _ensure_kiosk(hass, kiosk)
+        state["last_device_request"] = request_id
+        state["last_device_request_at_ms"] = int(time.time() * 1000)
+        try:
+            await mqtt.async_publish(
+                hass, _kiosk_topic(kiosk, "command/device/request"),
+                json.dumps(request_body), qos=1, retain=False,
+            )
+        except Exception:
+            pending.pop(request_id, None)
+            raise
+        return
     await mqtt.async_publish(
         hass, _kiosk_topic(kiosk, f"command/device/{command}") if command != "system"
         else _kiosk_topic(kiosk, "command/system"),
@@ -614,6 +676,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 qos=1,
             )
         )
+    unsubs.append(
+        await mqtt.async_subscribe(
+            hass,
+            f"{TOPIC_PREFIX}/+/device/response",
+            lambda msg: _handle_device_response(hass, msg),
+            qos=1,
+        )
+    )
 
     unsubs.append(
         await mqtt.async_subscribe(

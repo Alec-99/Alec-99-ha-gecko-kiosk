@@ -271,6 +271,43 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(1, self.hass.publishes[-2][1])
         self.assertEqual(0, self.hass.publishes[-1][1])
 
+    def test_acknowledged_device_commands_correlate_only_to_live_origin_responses(self):
+        kiosk._handle_status(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/status/capabilities",
+            payload=json.dumps({"schema": 1, "protocol_version": 1,
+                               "capabilities": ["display.brightness", "command.acknowledged"]}),
+        ))
+        asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+            "kiosk": "tablet_a", "command": "brightness", "value": "62",
+        })))
+        topic, payload, qos, retain = self.hass.publishes[-1]
+        self.assertEqual("ha_kiosk/tablet_a/command/device/request", topic)
+        self.assertEqual(1, qos)
+        self.assertFalse(retain)
+        self.assertEqual("brightness", payload["command"])
+        self.assertEqual("62", payload["value"])
+        request_id = payload["request_id"]
+        self.assertIn(request_id, self.hass.data[kiosk.DOMAIN]["pending_device_commands"])
+
+        def response(device, body):
+            return types.SimpleNamespace(
+                topic="ha_kiosk/" + device + "/device/response",
+                payload=json.dumps(body),
+            )
+
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_b", {"schema": 1, "request_id": request_id, "status": "applied"}))
+        self.assertIn(request_id, self.hass.data[kiosk.DOMAIN]["pending_device_commands"])
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_a", {"schema": 1, "request_id": "f" * 32, "status": "applied"}))
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_a", {"schema": 1, "request_id": request_id, "status": []}))
+        self.assertNotIn("last_device_response", kiosk._ensure_kiosk(self.hass, "tablet_a"))
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_a", {"schema": 1, "request_id": request_id, "status": "applied", "detail": "ok"}))
+        self.assertEqual("applied", kiosk._ensure_kiosk(self.hass, "tablet_a")["last_device_response"]["status"])
+        self.assertNotIn(request_id, self.hass.data[kiosk.DOMAIN]["pending_device_commands"])
+
     def test_invalid_or_unsupported_capability_manifest_fails_closed(self):
         for payload in (
             "not-json",
