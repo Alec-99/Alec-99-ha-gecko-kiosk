@@ -2,7 +2,7 @@
 
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
-**Integration version:** `0.2.0` · **Domain:** `ha_gecko_kiosk`.
+**Integration version:** `0.2.1` · **Domain:** `ha_gecko_kiosk`.
 
 ## Installeren in Home Assistant (HACS / Marketplace)
 
@@ -35,3 +35,7 @@ Deze repository bevat **uitsluitend de publieke HA-integratie**, geen Android AP
 Deze broncode is overgenomen uit een geselecteerde private experimentele ontwikkelbranch, met aparte publieke versiegeschiedenis. De CI test basiscontracten en syntaxis; dat bewijst **geen** werkende fysieke tablet of productie-installatie. Verwijder Browser Mod of oudere kiosk-integraties pas nadat alle bestaande functies zijn gecontroleerd.
 
 Zie [publicatiebeleid](docs/PUBLISHING.md). Nog geen projectlicentie gekozen: publiek zichtbaar betekent **niet automatisch opensource gelicentieerd**.
+
+## Codex-overdracht
+
+Voor het verdere UI-herontwerp, de iconen en de bewuste scheiding tussen de private ontwikkelrepo en deze publieke HACS-testrepo: [Codex-handoff UI & branding](docs/HANDOFF_CODEX_UI_BRANDING_2026-11-06.md).
