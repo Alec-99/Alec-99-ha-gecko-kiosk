@@ -179,6 +179,21 @@ test('polling updates untouched fields without replacing the editor or overwriti
   assert.equal(calls.length, 0);
 });
 
+test('a focused but untouched field adopts a newer tablet value without becoming a draft', async () => {
+  setup([kiosk('alpha')]);
+  await click('[data-tab="settings"]');
+  const field = panel.shadowRoot.querySelector('[data-key="width_percent"]');
+  field.focus();
+  list = [kiosk('alpha')];
+  list[0].settings.camera_popup.width_percent = 90;
+  await panel._refresh();
+  await panel._refresh();
+  assert.equal(panel.shadowRoot.querySelector('[data-key="width_percent"]'), field);
+  assert.equal(field.value, '90');
+  assert.equal(panel.shadowRoot.activeElement, field);
+  assert.equal(panel._drafts.has('alpha:camera_popup:width_percent'), false);
+});
+
 test('MQTT charging strings false and unknown do not imply charging', () => {
   setup([kiosk('alpha')]);
   assert.equal(panel._chargingText('false'), 'Niet aan het opladen');

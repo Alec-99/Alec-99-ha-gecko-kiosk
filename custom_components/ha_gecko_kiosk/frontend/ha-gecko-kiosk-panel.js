@@ -199,9 +199,9 @@ class HaGeckoKioskPanel extends HTMLElement {
       const raw = kiosk?.settings?.[input.dataset.section]?.[input.dataset.key];
       if (raw == null) continue;
       const value = input.type === "checkbox" ? Boolean(raw) : String(raw);
-      if (!this._drafts.has(key) && (this.shadowRoot.activeElement !== input || forceSection === input.dataset.section)) {
-        if (input.type === "checkbox") input.checked = value;
-        else input.value = value;
+      if (!this._drafts.has(key) || forceSection === input.dataset.section) {
+        if (input.type === "checkbox" && input.checked !== value) input.checked = value;
+        else if (input.type !== "checkbox" && input.value !== value) input.value = value;
       }
       input.dataset.serverValue = JSON.stringify(value);
     }
@@ -236,7 +236,17 @@ class HaGeckoKioskPanel extends HTMLElement {
       <nav aria-label="Kioskbeheer">${tabs.map(([id,label,icon])=>`<button data-action="tab" data-tab="${id}" aria-current="${this._tab===id?"page":"false"}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`).join("")}</nav>
       <div class="notice error" role="alert" data-load-error ${this._loadError ? "" : "hidden"}>${this._escape(this._loadError)}</div>
       ${this._message?`<div class="notice ${this._messageKind}" role="${this._messageKind==="error"?"alert":"status"}">${this._escape(this._message)}</div>`:""}${content}`;
-    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) input.dataset.focusKey=`${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
+      input.dataset.focusKey=`${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+      const rememberDraft = () => {
+        const key = `${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+        const value = input.type === "checkbox" ? input.checked : input.value;
+        if (JSON.stringify(value) === input.dataset.serverValue) this._drafts.delete(key);
+        else this._drafts.set(key, value);
+      };
+      input.addEventListener("input", rememberDraft);
+      input.addEventListener("change", rememberDraft);
+    }
     for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
       button.dataset.focusKey = [button.dataset.action, button.dataset.tab, button.dataset.kiosk, button.dataset.section, button.dataset.value].join(":");
     }
