@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from uuid import uuid4
 from pathlib import Path
@@ -36,6 +37,10 @@ SERVICE_SET_CAMERA_POPUP = "set_camera_popup"
 SERVICE_GET_SETTINGS = "get_settings"
 SERVICE_RESET_SETTINGS = "reset_settings"
 POPUP_RESPONSE_EVENT = "ha_gecko_kiosk_popup_response"
+CAPABILITY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+RESOURCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,64}$")
+CAPABILITY_MANIFEST_MAX_BYTES = 4096
+CAPABILITY_MANIFEST_MAX_ITEMS = 64
 
 CAMERA_SCHEMA = vol.Schema(
     {
@@ -153,7 +158,79 @@ def _handle_status(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
     if len(parts) != 4 or parts[0] != TOPIC_PREFIX or parts[2] != "status":
         return
     kiosk = _ensure_kiosk(hass, parts[1])
+    if parts[3] == "capabilities":
+        kiosk["capabilities"] = _parse_capability_manifest(message.payload)
+        return
     kiosk["status"][parts[3]] = str(message.payload)
+
+
+def _parse_capability_manifest(payload: str) -> dict[str, Any]:
+    """Validate the versioned manifest and fail closed for declared bad data."""
+    invalid = {"compatible": False, "protocol_version": None, "capabilities": []}
+    if not isinstance(payload, str):
+        return invalid
+    try:
+        if len(payload.encode("utf-8")) > CAPABILITY_MANIFEST_MAX_BYTES:
+            return invalid
+    except UnicodeEncodeError:
+        return invalid
+    try:
+        value = json.loads(payload)
+    except (ValueError, TypeError):
+        return invalid
+    if not isinstance(value, dict):
+        return invalid
+
+    schema = value.get("schema")
+    version = value.get("protocol_version")
+    capabilities = value.get("capabilities")
+    resources = value.get("resources", {})
+    if (type(schema) is not int or type(version) is not int
+            or not isinstance(capabilities, list)
+            or len(capabilities) > CAPABILITY_MANIFEST_MAX_ITEMS
+            or not isinstance(resources, dict)):
+        return invalid
+    if any(not isinstance(item, str) or not CAPABILITY_ID_PATTERN.fullmatch(item)
+           for item in capabilities):
+        return invalid
+    camera_ids = resources.get("cameras", [])
+    if (not isinstance(camera_ids, list)
+            or len(camera_ids) > CAPABILITY_MANIFEST_MAX_ITEMS
+            or any(not isinstance(item, str) or not RESOURCE_ID_PATTERN.fullmatch(item)
+                   for item in camera_ids)):
+        return invalid
+
+    return {
+        "compatible": schema == 1 and version == 1,
+        "protocol_version": version,
+        "capabilities": sorted(set(capabilities)),
+        "resources": {"cameras": sorted(set(camera_ids))},
+    }
+
+
+def _require_capability(hass: HomeAssistant, kiosk_id: str, capability: str) -> None:
+    """Keep legacy devices usable while enforcing an explicit manifest."""
+    state = _state(hass).get(kiosk_id)
+    if state is None or "capabilities" not in state:
+        return
+    manifest = state["capabilities"]
+    if not manifest.get("compatible"):
+        raise vol.Invalid("Kiosk capability manifest is invalid or uses an unsupported protocol version")
+    if capability not in manifest["capabilities"]:
+        raise vol.Invalid(f"Kiosk does not support {capability}")
+
+
+def _require_any_capability(
+    hass: HomeAssistant, kiosk_id: str, capabilities: tuple[str, ...]
+) -> None:
+    state = _state(hass).get(kiosk_id)
+    if state is None or "capabilities" not in state:
+        return
+    manifest = state["capabilities"]
+    if not manifest.get("compatible"):
+        raise vol.Invalid("Kiosk capability manifest is invalid or uses an unsupported protocol version")
+    if not set(capabilities).intersection(manifest["capabilities"]):
+        raise vol.Invalid("Kiosk does not support any of the requested settings capabilities")
 
 
 @callback
@@ -255,6 +332,7 @@ async def _service_camera(hass: HomeAssistant, call: ServiceCall) -> None:
     camera = call.data["camera"].strip()
     if not kiosk or any(char in kiosk for char in "/+#") or not camera or any(char in camera for char in "/+#"):
         raise vol.Invalid("Invalid kiosk or camera ID")
+    _require_capability(hass, kiosk, "camera.external")
     payload = json.dumps({"action": action, "camera": camera})
     await mqtt.async_publish(
         hass,
@@ -291,6 +369,15 @@ async def _service_device(hass: HomeAssistant, call: ServiceCall) -> None:
         payload = "reload_dashboard"
     else:
         raise vol.Invalid("Unsupported device command")
+    capability = {
+        "screen": "display.power",
+        "screensaver": "screensaver.activate",
+        "brightness": "display.brightness",
+        "volume": "audio.volume",
+        "mute": "audio.mute",
+        "system": "dashboard.reload",
+    }[command]
+    _require_capability(hass, kiosk, capability)
     await mqtt.async_publish(
         hass, _kiosk_topic(kiosk, f"command/device/{command}") if command != "system"
         else _kiosk_topic(kiosk, "command/system"),
@@ -304,6 +391,11 @@ async def _send_settings_command(
     kiosk = kiosk.strip()
     if not _valid_segment(kiosk):
         raise vol.Invalid("Invalid kiosk ID")
+    if action == "get":
+        _require_any_capability(hass, kiosk, ("screensaver.settings", "camera.popup_settings"))
+    else:
+        capability = "screensaver.settings" if section == "screensaver" else "camera.popup_settings"
+        _require_capability(hass, kiosk, capability)
     request_id = uuid4().hex
     payload: dict[str, Any] = {
         "schema": 1,
@@ -342,6 +434,7 @@ async def _service_notification(hass: HomeAssistant, call: ServiceCall) -> None:
     kiosk = call.data["kiosk"].strip()
     if not _valid_segment(kiosk):
         raise vol.Invalid("Invalid kiosk ID")
+    _require_capability(hass, kiosk, "notification.display")
 
     action = call.data["action"]
     notice_id = call.data["notification_id"].strip()
@@ -383,12 +476,17 @@ async def _service_popup(hass: HomeAssistant, call: ServiceCall) -> None:
         raise vol.Invalid("Invalid kiosk or camera ID")
 
     if kind == "camera":
+        _require_capability(hass, kiosk, "camera.external")
         await mqtt.async_publish(
             hass, _kiosk_topic(kiosk, "command/camera"),
             json.dumps({"action": "show", "camera": camera}),
             qos=1, retain=False,
         )
         return
+
+    _require_capability(
+        hass, kiosk, "popup.confirmation" if kind == "confirmation" else "popup.message"
+    )
 
     popup_id = uuid4().hex
     pending = hass.data[DOMAIN].setdefault("pending_popups", {})

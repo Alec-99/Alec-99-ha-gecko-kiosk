@@ -1,5 +1,7 @@
 # HA Gecko Kiosk
 
+![HA Gecko Kiosk — graphite and orange identity](assets/brand/github-readme-banner-1600x400.png)
+
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
 **Integration version:** `0.2.1` · **Domain:** `ha_gecko_kiosk`.
@@ -27,6 +29,10 @@ Handmatig installeren: kopieer de map `custom_components/ha_gecko_kiosk` naar `/
 Beschikbare HA-acties: `ha_gecko_kiosk.camera`, `ha_gecko_kiosk.device`, `ha_gecko_kiosk.popup`, `ha_gecko_kiosk.notification`, `ha_gecko_kiosk.set_screensaver`, `ha_gecko_kiosk.set_camera_popup`, `ha_gecko_kiosk.get_settings`, `ha_gecko_kiosk.reset_settings`.
 
 Apparaattopics gebruiken het patroon `ha_kiosk/<device_id>/`. Wachtwoorden, lokale dashboard-URL's en camerastreamadressen staan **niet** in deze repository.
+
+De generieke capability-advertentie voor Gecko- en toekomstige kioskclients is beschreven in [MQTT capability manifest, version 1](docs/MQTT_CAPABILITIES.md).
+
+De sidebar, documentatie en integratie-iconen gebruiken de graphite/orange-identiteit; de volledige projectbrede bronset staat niet in deze publieke integratierepository.
 
 ## Scope en teststatus
 

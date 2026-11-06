@@ -9,8 +9,8 @@ let panel;
 let calls;
 let list;
 
-function kiosk(id, availability = 'online') {
-  return {
+function kiosk(id, availability = 'online', capabilities) {
+  const device = {
     id, availability,
     status: { camera_state: 'hidden' },
     battery: { level: 87, charging: false, temperature: 29 },
@@ -24,6 +24,8 @@ function kiosk(id, availability = 'online') {
       camera_popup: { width_percent: 80, height_percent: 70, dim_percent: 40 },
     },
   };
+  if (capabilities !== undefined) device.capabilities = capabilities;
+  return device;
 }
 
 function setup(kiosks = []) {
@@ -67,7 +69,8 @@ test('overview handles empty, single and multiple kiosks with truthful availabil
   assert.equal(panel.shadowRoot.querySelectorAll('.kiosk-card').length, 1);
   assert.match(panel.shadowRoot.textContent, /online/);
   assert.match(panel.shadowRoot.querySelector('style').textContent, /color-scheme:dark/);
-  assert.match(panel.shadowRoot.querySelector('style').textContent, /--primary-background-color:#17191c/);
+  assert.match(panel.shadowRoot.querySelector('style').textContent, /--primary-background-color:#171b21/);
+  assert.match(panel.shadowRoot.querySelector('style').textContent, /--primary-color:#ff8a00/);
   setup([kiosk('alpha', 'offline'), kiosk('beta', 'unknown')]);
   assert.equal(panel.shadowRoot.querySelectorAll('.kiosk-card').length, 2);
   assert.ok(panel.shadowRoot.querySelector('.pill.offline'));
@@ -78,7 +81,7 @@ test('navigation exposes distinct overview, controls, settings and diagnostics s
   setup([kiosk('alpha')]);
   assert.equal(panel.shadowRoot.querySelectorAll('nav [data-action="tab"]').length, 4);
   await click('[data-tab="controls"]');
-  assert.match(panel.shadowRoot.textContent, /Deurbelcamera/);
+  assert.match(panel.shadowRoot.textContent, /Camera: doorbell/);
   await click('[data-tab="settings"]');
   assert.match(panel.shadowRoot.textContent, /Schermbeveiliging/);
   assert.match(panel.shadowRoot.textContent, /Camera-popup/);
@@ -99,6 +102,61 @@ test('existing screen and camera actions call the original HA services and paylo
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), { kiosk: 'alpha', command: 'screensaver', value: 'ON' });
   assert.deepEqual(JSON.parse(JSON.stringify(calls[2][2])), { kiosk: 'alpha', action: 'prewarm', camera: 'doorbell' });
+});
+
+test('capability manifests show only supported controls and legacy kiosks keep both controls', async () => {
+  setup([kiosk('legacy')]);
+  await click('[data-tab="controls"]');
+  assert.ok(panel.shadowRoot.querySelector('[data-action="device"][data-command="screensaver"]'));
+  assert.ok(panel.shadowRoot.querySelector('[data-action="camera"]'));
+
+  setup([kiosk('display-only', 'online', {
+    compatible: true, protocol_version: 1, capabilities: ['display.power', 'vendor.custom'],
+  })]);
+  await click('[data-tab="controls"]');
+  assert.equal(panel.shadowRoot.querySelector('[data-action="device"][data-command="screensaver"]'), null);
+  assert.equal(panel.shadowRoot.querySelector('[data-action="camera"]'), null);
+  assert.match(panel.shadowRoot.textContent, /geen bedienbare capabilities/);
+  await click('[data-tab="diagnostics"]');
+  assert.match(panel.shadowRoot.textContent, /display\.power/);
+
+  setup([kiosk('screensaver-only', 'online', {
+    compatible: true, protocol_version: 1,
+    capabilities: ['screensaver.activate', 'screensaver.settings'],
+  })]);
+  await click('[data-tab="controls"]');
+  assert.ok(panel.shadowRoot.querySelector('[data-action="device"][data-command="screensaver"]'));
+  assert.equal(panel.shadowRoot.querySelector('[data-action="camera"]'), null);
+  await click('[data-tab="settings"]');
+  assert.ok(panel.shadowRoot.querySelector('[data-section="screensaver"]'));
+  assert.equal(panel.shadowRoot.querySelector('[data-section="camera_popup"]'), null);
+});
+
+test('an unsupported protocol manifest disables controls and explains why', async () => {
+  setup([kiosk('future-device', 'online', {
+    compatible: false, protocol_version: 2, capabilities: [],
+  })]);
+  await click('[data-tab="controls"]');
+  assert.equal(panel.shadowRoot.querySelectorAll('.control-group').length, 0);
+  assert.match(panel.shadowRoot.textContent, /niet-ondersteunde capabilityversie/);
+  await click('[data-tab="settings"]');
+  assert.match(panel.shadowRoot.textContent, /geen extern wijzigbare instellingen/);
+  await click('[data-tab="diagnostics"]');
+  assert.equal(panel.shadowRoot.querySelector('[data-action="get-settings"]'), null);
+});
+
+test('configured camera resources are generic and escaped before rendering commands', async () => {
+  setup([kiosk('camera-device', 'online', {
+    compatible: true, protocol_version: 1,
+    capabilities: ['camera.external'], resources: { cameras: ['entry_cam', 'yard'] },
+  })]);
+  await click('[data-tab="controls"]');
+  assert.deepEqual([...panel.shadowRoot.querySelectorAll('[data-action="camera"][data-value="show"]')]
+    .map(button => button.dataset.camera), ['entry_cam', 'yard']);
+  await click('[data-action="camera"][data-camera="yard"][data-value="show"]');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), {
+    kiosk: 'camera-device', action: 'show', camera: 'yard',
+  });
 });
 
 test('settings drafts and focus survive polling; validation and per-section calls remain intact', async () => {

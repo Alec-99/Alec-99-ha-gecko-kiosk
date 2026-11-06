@@ -66,6 +66,28 @@ class HaGeckoKioskPanel extends HTMLElement {
 
   _selected() { return this._kiosks.find(kiosk => kiosk.id === this._selectedKiosk); }
 
+  _supports(kiosk, capability) {
+    const manifest = kiosk?.capabilities;
+    if (manifest == null) return true; // Legacy Gecko clients did not publish a manifest.
+    return manifest.compatible === true && Array.isArray(manifest.capabilities) &&
+      manifest.capabilities.includes(capability);
+  }
+
+  _controls(kiosk) {
+    const groups = [];
+    if (this._supports(kiosk, "screensaver.activate")) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3><button data-action="device" data-command="screensaver" data-value="ON">Tonen</button><button class="secondary" data-action="device" data-command="screensaver" data-value="OFF">Verbergen</button></div>`);
+    const manifest = kiosk?.capabilities;
+    const cameraIds = manifest == null ? ["doorbell"] :
+      this._supports(kiosk, "camera.external") && Array.isArray(manifest.resources?.cameras)
+        ? manifest.resources.cameras : [];
+    for (const cameraId of cameraIds) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Camera: ${this._escape(cameraId)}</h3><button data-action="camera" data-camera="${this._escape(cameraId)}" data-value="prewarm">Voorladen</button><button data-action="camera" data-camera="${this._escape(cameraId)}" data-value="show">Tonen</button><button class="secondary" data-action="camera" data-camera="${this._escape(cameraId)}" data-value="hide">Verbergen</button><button class="secondary" data-action="camera" data-camera="${this._escape(cameraId)}" data-value="stop">Stoppen</button></div>`);
+    if (groups.length) return `<div class="control-grid">${groups.join("")}</div>`;
+    if (kiosk?.capabilities?.compatible === false) return `<p class="muted" role="status">Dit apparaat gebruikt een niet-ondersteunde capabilityversie. De bediening is uitgeschakeld.</p>`;
+    return `<p class="muted" role="status">Dit apparaat heeft geen bedienbare capabilities opgegeven.</p>`;
+  }
+
   _settingsStatusText(kiosk) {
     const response = kiosk.last_settings_response;
     const request = kiosk.last_settings_request;
@@ -111,10 +133,13 @@ class HaGeckoKioskPanel extends HTMLElement {
 
   _settings(kiosk) {
     const settings = kiosk.settings;
-    if (!settings?.screensaver || !settings?.camera_popup) return `<p class="muted">De tablet heeft nog geen instellingen teruggestuurd.</p><button data-action="get-settings">Instellingen ophalen</button>`;
+    const hasScreensaver = this._supports(kiosk, "screensaver.settings");
+    const hasCameraPopup = this._supports(kiosk, "camera.popup_settings");
+    if (!hasScreensaver && !hasCameraPopup) return `<p class="muted">Dit apparaat ondersteunt geen extern wijzigbare instellingen.</p>`;
+    if ((hasScreensaver && !settings?.screensaver) || (hasCameraPopup && !settings?.camera_popup)) return `<p class="muted">De tablet heeft nog geen instellingen teruggestuurd.</p><button data-action="get-settings">Instellingen ophalen</button>`;
     const s = settings.screensaver, c = settings.camera_popup;
     return `<div class="settings-grid">
-      <section class="setting-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3>
+      ${hasScreensaver ? `<section class="setting-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3>
         ${this._field(kiosk,"screensaver","enabled","Screensaver inschakelen",s.enabled,"checkbox")}
         ${this._field(kiosk,"screensaver","inactivity_timeout_seconds","Wachttijd (seconden)",s.inactivity_timeout_seconds,"number",5,86400)}
         ${this._field(kiosk,"screensaver","consume_wake_touch","Eerste tik maakt alleen wakker",s.consume_wake_touch,"checkbox")}
@@ -127,13 +152,14 @@ class HaGeckoKioskPanel extends HTMLElement {
         ${this._field(kiosk,"screensaver","background_color","Achtergrondkleur",s.background_color || "#000000","color")}
         ${this._field(kiosk,"screensaver","text_color","Tekstkleur",s.text_color || "#ffffff","color")}
         <div class="actions"><button data-action="save" data-section="screensaver">Screensaver verzenden</button><button class="secondary" data-action="reset" data-section="screensaver">Herstellen</button><button class="secondary" data-action="discard" data-section="screensaver">Tabletwaarden gebruiken</button></div>
-      </section>
-      <section class="setting-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Camera-popup</h3>
+      </section>` : ""}
+      ${hasCameraPopup ? `<section class="setting-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Camera-popup</h3>
         ${this._field(kiosk,"camera_popup","width_percent","Breedte (%)",c.width_percent,"number",40,100)}
         ${this._field(kiosk,"camera_popup","height_percent","Hoogte (%)",c.height_percent,"number",40,100)}
         ${this._field(kiosk,"camera_popup","dim_percent","Achtergrond verduisteren (%)",c.dim_percent,"number",0,95)}
         <div class="actions"><button data-action="save" data-section="camera_popup">Camera-popup verzenden</button><button class="secondary" data-action="reset" data-section="camera_popup">Herstellen</button><button class="secondary" data-action="discard" data-section="camera_popup">Tabletwaarden gebruiken</button></div>
-      </section></div>`;
+      </section>` : ""}
+      </div>`;
   }
 
   _chargingText(value) {
@@ -160,13 +186,20 @@ class HaGeckoKioskPanel extends HTMLElement {
   _diagnostics(kiosk) {
     if (!kiosk) return `<p class="muted">Selecteer een kiosk om diagnostiek te bekijken.</p>`;
     const battery = kiosk.battery || {}, status = kiosk.status || {};
+    const manifest = kiosk.capabilities;
+    const capabilityNames = Array.isArray(manifest?.capabilities) ? manifest.capabilities : [];
+    const capabilityText = manifest == null ? "Legacy (geen manifest)"
+      : manifest.compatible ? (capabilityNames.join(", ") || "Geen")
+        : `Niet compatibel (protocol ${manifest.protocol_version ?? "onbekend"})`;
     return `<dl class="diagnostics"><dt>Verbinding</dt><dd>${this._escape(kiosk.availability || "unknown")}</dd>
+      <dt>Protocol</dt><dd>${this._escape(capabilityText)}</dd>
       <dt>Camera</dt><dd>${this._escape(status.camera_state ?? "—")}</dd>
       <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
       <dt>Opladen</dt><dd>${this._chargingText(battery.charging)}</dd>
       <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
       <dt>Instellingenstatus</dt><dd role="status">${this._escape(this._settingsStatusText(kiosk))}</dd></dl>
-      <button class="secondary" data-action="get-settings">Instellingen opnieuw opvragen</button>`;
+      ${this._supports(kiosk, "screensaver.settings") || this._supports(kiosk, "camera.popup_settings")
+        ? `<button class="secondary" data-action="get-settings">Instellingen opnieuw opvragen</button>` : ""}`;
   }
 
   async _call(service, data, successText) {
@@ -217,14 +250,11 @@ class HaGeckoKioskPanel extends HTMLElement {
     const tabs = [["overview","Overzicht","mdi:view-dashboard"],["controls","Bediening","mdi:gesture-tap-button"],["settings","Instellingen","mdi:cog-outline"],["diagnostics","Diagnostiek","mdi:heart-pulse"]];
     let content = "";
     if (this._tab === "overview") content = this._overview();
-    if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2><div class="control-grid">
-      <div class="control-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3><button data-action="device" data-command="screensaver" data-value="ON">Tonen</button><button class="secondary" data-action="device" data-command="screensaver" data-value="OFF">Verbergen</button></div>
-      <div class="control-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Deurbelcamera</h3><button data-action="camera" data-value="prewarm">Voorladen</button><button data-action="camera" data-value="show">Tonen</button><button class="secondary" data-action="camera" data-value="hide">Verbergen</button><button class="secondary" data-action="camera" data-value="stop">Stoppen</button></div>
-    </div></section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
+    if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2>${this._controls(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
     if (this._tab === "settings") content = kiosk ? `<section class="surface"><h2>Instellingen <span class="muted">${this._escape(kiosk.id)}</span></h2><p class="notice" role="status" data-settings-status>${this._escape(this._settingsStatusText(kiosk))}</p><p class="muted">Een verzonden opdracht is pas toegepast nadat de tablet deze heeft bevestigd.</p>${this._settings(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
     if (this._tab === "diagnostics") content = `<section class="surface"><h2>Diagnostiek</h2>${this._diagnostics(kiosk)}</section>`;
     this.shadowRoot.innerHTML = `<style>
-      :host{display:block;box-sizing:border-box;min-height:100%;padding:clamp(12px,3vw,28px);color-scheme:dark;--primary-text-color:#f1f2f4;--secondary-text-color:#aeb4bc;--primary-background-color:#17191c;--secondary-background-color:#292d32;--card-background-color:#202327;--primary-color:#f08a35;--text-primary-color:#17191c;--divider-color:#3a3f45;--success-color:#71c785;--error-color:#ff7a70;color:var(--primary-text-color);background:var(--primary-background-color);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
+      :host{display:block;box-sizing:border-box;min-height:100%;padding:clamp(12px,3vw,28px);color-scheme:dark;--primary-text-color:#f7f8fa;--secondary-text-color:#b8c0cb;--primary-background-color:#171b21;--secondary-background-color:#2b2f36;--card-background-color:#2b2f36;--primary-color:#ff8a00;--text-primary-color:#11151d;--divider-color:#4b5563;--success-color:#71c785;--error-color:#ff7a70;color:var(--primary-text-color);background:var(--primary-background-color);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
       *{box-sizing:border-box}header{display:flex;align-items:center;gap:14px;margin:0 0 20px}.brand{width:40px;height:40px;object-fit:contain}h1{font-size:clamp(22px,4vw,30px);margin:0}h2{font-size:20px;margin:0 0 16px}h3{font-size:16px;margin:0 0 12px}h4{margin:16px 0 8px}.muted{color:var(--secondary-text-color);font-weight:400;font-size:.9em}
       nav{display:flex;gap:8px;overflow-x:auto;border-bottom:1px solid var(--divider-color);margin-bottom:20px}nav button{white-space:nowrap;border-radius:10px 10px 0 0;background:transparent;color:var(--secondary-text-color);border-bottom:3px solid transparent}nav button[aria-current=page]{color:var(--primary-text-color);border-bottom-color:var(--primary-color)}
       button{font:inherit;min-height:44px;padding:9px 14px;border:0;border-radius:10px;background:var(--primary-color);color:var(--text-primary-color,white);cursor:pointer}button.secondary{background:var(--secondary-background-color);color:var(--primary-text-color)}button:hover{filter:brightness(1.08)}button:focus-visible,input:focus-visible{outline:3px solid var(--primary-color);outline-offset:2px}
@@ -279,7 +309,7 @@ class HaGeckoKioskPanel extends HTMLElement {
       return;
     }
     if(action==="device"){await this._call("device",{kiosk,command:button.dataset.command,value:button.dataset.value},"Opdracht verzonden.");return;}
-    if(action==="camera"){await this._call("camera",{kiosk,action:button.dataset.value,camera:"doorbell"},"Cameraopdracht verzonden.");return;}
+    if(action==="camera"){await this._call("camera",{kiosk,action:button.dataset.value,camera:button.dataset.camera||"doorbell"},"Cameraopdracht verzonden.");return;}
     if(action==="get-settings"){await this._call("get_settings",{kiosk},"Instellingen opgevraagd.");return;}
     if(action==="reset"){
       if(!window.confirm("Instellingen herstellen naar de oorspronkelijke kioskconfiguratie?"))return;
