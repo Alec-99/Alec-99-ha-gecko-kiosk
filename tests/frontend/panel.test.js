@@ -66,6 +66,8 @@ test('overview handles empty, single and multiple kiosks with truthful availabil
   setup([kiosk('alpha')]);
   assert.equal(panel.shadowRoot.querySelectorAll('.kiosk-card').length, 1);
   assert.match(panel.shadowRoot.textContent, /online/);
+  assert.match(panel.shadowRoot.querySelector('style').textContent, /color-scheme:dark/);
+  assert.match(panel.shadowRoot.querySelector('style').textContent, /--primary-background-color:#17191c/);
   setup([kiosk('alpha', 'offline'), kiosk('beta', 'unknown')]);
   assert.equal(panel.shadowRoot.querySelectorAll('.kiosk-card').length, 2);
   assert.ok(panel.shadowRoot.querySelector('.pill.offline'));
