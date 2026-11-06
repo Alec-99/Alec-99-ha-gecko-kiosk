@@ -16,6 +16,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked frontend test dependencies
+        run: npm ci --ignore-scripts
       - name: Check public snapshot before generating test artifacts
         run: python scripts/check_public_snapshot.py
       - name: Check Python, manifests and protocol contracts
@@ -31,3 +37,4 @@ jobs:
         run: |
           node --check custom_components/ha_gecko_kiosk/frontend/ha-gecko-kiosk-panel.js
           node --check custom_components/ha_gecko_kiosk/frontend/ha-gecko-preload.js
+          npm run test:frontend

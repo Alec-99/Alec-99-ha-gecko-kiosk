@@ -6,7 +6,11 @@ class HaGeckoKioskPanel extends HTMLElement {
     this._kiosks = [];
     this._timer = null;
     this._loading = false;
-    this._view = { tab: "overview", drafts: new Map(), focus: null };
+    this._tab = "overview";
+    this._selectedKiosk = "";
+    this._drafts = new Map();
+    this._message = "";
+    this._messageKind = "info";
   }
 
   set hass(value) {
@@ -17,395 +21,199 @@ class HaGeckoKioskPanel extends HTMLElement {
     }
   }
 
-  set panel(value) {
-    this._panel = value;
-  }
-
-  connectedCallback() {
-    this._render();
-  }
-
+  set panel(value) { this._panel = value; }
+  connectedCallback() { this._render(); }
   disconnectedCallback() {
-    if (this._timer) {
-      window.clearInterval(this._timer);
-      this._timer = null;
-    }
+    if (this._timer) window.clearInterval(this._timer);
+    this._timer = null;
   }
 
   async _refresh() {
     if (!this._hass || this._loading) return;
     this._loading = true;
     try {
-      const result = await this._hass.connection.sendMessagePromise({
-        type: "ha_gecko_kiosk/list",
-      });
+      const result = await this._hass.connection.sendMessagePromise({ type: "ha_gecko_kiosk/list" });
       this._kiosks = Array.isArray(result.kiosks) ? result.kiosks : [];
-      this._error = "";
-      // Do not destroy unsaved inputs during polling. Initial settings retrieval,
-      // however, must populate the open panel instead of appearing to do nothing.
-      const opened = this.shadowRoot.querySelector("details.settings[open]");
-      if (!opened) {
-        this._render();
-      } else {
-        const kioskId = opened.dataset.kiosk;
-        const kiosk = this._kiosks.find(k => k.id === kioskId);
-        const settingsJustArrived = kiosk?.settings?.screensaver &&
-          kiosk?.settings?.camera_popup &&
-          !opened.querySelector('[data-section="screensaver"][data-key]');
-        if (settingsJustArrived) {
-          this._render();
-          const restored = [...this.shadowRoot.querySelectorAll("details.settings")]
-            .find(el => el.dataset.kiosk === kioskId);
-          if (restored) restored.open = true;
-        } else {
-          const message = opened.querySelector(".settings-help");
-          if (message && kiosk) message.textContent = this._settingsStatusText(kiosk);
-        }
+      if (!this._kiosks.some(kiosk => kiosk.id === this._selectedKiosk)) {
+        this._selectedKiosk = this._kiosks[0]?.id || "";
       }
+      this._render();
     } catch (error) {
       console.error("Vernieuwen van kioskgegevens mislukt", error);
-      this._error = "Kioskgegevens konden niet worden geladen. Controleer de verbinding en probeer opnieuw.";
+      this._message = "Kioskgegevens konden niet worden geladen. Controleer de verbinding en probeer opnieuw.";
+      this._messageKind = "error";
       this._render();
     } finally {
       this._loading = false;
     }
   }
 
-  async _camera(kiosk, action) {
-    await this._hass.callService("ha_gecko_kiosk", "camera", {
-      kiosk,
-      action,
-      camera: "doorbell",
-    });
+  _escape(value) {
+    return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   }
 
-  async _device(kiosk, command, value) {
-    await this._hass.callService("ha_gecko_kiosk", "device", { kiosk, command, value });
-  }
+  _selected() { return this._kiosks.find(kiosk => kiosk.id === this._selectedKiosk); }
 
   _settingsStatusText(kiosk) {
     const response = kiosk.last_settings_response;
-    const lastRequest = kiosk.last_settings_request;
-    if (lastRequest && response?.request_id !== lastRequest) {
+    const request = kiosk.last_settings_request;
+    if (request && response?.request_id !== request) {
       const requestAt = Number(kiosk.last_settings_request_at_ms) || Date.now();
       return Date.now() - requestAt > 65_000
-        ? "Geen bevestiging van de tablet ontvangen (time-out)"
-        : "Instellingen verzonden; wachten op bevestiging van de tablet";
+        ? "Geen bevestiging ontvangen (time-out na 65 seconden)"
+        : "Verzonden; wachten op bevestiging van de tablet";
     }
-    return response
-      ? (response.status === "applied" ? "Laatste opdracht bevestigd door de tablet" :
-        "Laatste opdracht geweigerd: " + String(response.detail || "onbekende fout"))
-      : "Nog geen configuratieantwoord ontvangen";
+    if (response) return response.status === "applied"
+      ? "Bevestigd door de tablet" : `Geweigerd: ${String(response.detail || "onbekende fout")}`;
+    return "Nog geen configuratieantwoord ontvangen";
   }
 
-  _settingsMarkup(kiosk) {
+  _captureState() {
+    const active = this.shadowRoot.activeElement;
+    const focus = active?.dataset?.focusKey;
+    const scrollTop = window.scrollY || this.shadowRoot.scrollTop;
+    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
+      const key = `${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+      this._drafts.set(key, input.type === "checkbox" ? input.checked : input.value);
+    }
+    return { focus, scrollTop };
+  }
+
+  _field(kiosk, section, key, label, value, type = "number", min = "", max = "") {
     const id = this._escape(kiosk.id);
-    const settings = kiosk.settings;
-    const responseText = this._escape(this._settingsStatusText(kiosk));
-
-    if (!settings?.screensaver || !settings?.camera_popup) {
-      return `
-        <div class="settings-help">De tablet heeft nog geen instellingen teruggestuurd.</div>
-        <button class="refresh-settings" data-kiosk="${id}">Instellingen ophalen</button>`;
-    }
-    const screen = settings.screensaver;
-    const camera = settings.camera_popup;
-    const switches = [
-      ["enabled", "Screensaver inschakelen"],
-      ["show_clock", "Klok tonen"],
-      ["show_date", "Datum tonen"],
-      ["consume_wake_touch", "Eerste tik enkel wakker maken"],
-    ];
-    const ints = [
-      ["inactivity_timeout_seconds", "Wachttijd (s)", 5, 86400],
-      ["clock_text_size_sp", "Klokgrootte (sp)", 12, 200],
-      ["date_text_size_sp", "Datumgrootte (sp)", 10, 100],
-      ["clock_update_interval_seconds", "Verversing klok (s)", 1, 3600],
-    ];
-    const fields = [
-      ...switches.map(([key, label]) => `<label class="setting-row">
-        <span>${label}</span>
-        <input type="checkbox" data-section="screensaver" data-key="${key}" ${screen[key] ? "checked" : ""}>
-      </label>`),
-      ...ints.map(([key, label, min, max]) => `<label class="setting-row">
-        <span>${label}</span>
-        <input type="number" min="${min}" max="${max}" step="1"
-          data-section="screensaver" data-key="${key}"
-          value="${Number(screen[key])}">
-      </label>`),
-      ...[["background_color", "Achtergrondkleur"], ["text_color", "Tekstkleur"]]
-        .map(([key, label]) => `<label class="setting-row">
-          <span>${label}</span>
-          <input type="color" data-section="screensaver" data-key="${key}"
-            value="${this._escape(screen[key] || "#ffffff")}">
-        </label>`),
-    ].join("");
-    const cameraFields = [
-      ["width_percent", "Breedte popup (%)", 40, 100],
-      ["height_percent", "Hoogte popup (%)", 40, 100],
-      ["dim_percent", "Achtergrond verduisteren (%)", 0, 95],
-    ].map(([key, label, min, max]) => `<label class="setting-row">
-      <span>${label}</span>
-      <input type="number" min="${min}" max="${max}" step="1"
-        data-section="camera_popup" data-key="${key}"
-        value="${Number(camera[key])}">
-    </label>`).join("");
-    return `
-      <div class="settings-help">${responseText}</div>
-      <div class="actions">
-        <button class="refresh-settings" data-kiosk="${id}">Instellingen ophalen</button>
-      </div>
-      <h3>Screensaver</h3>
-      <div class="settings-fields">${fields}</div>
-      <div class="actions">
-        <button class="save-settings" data-kiosk="${id}" data-section="screensaver">Opslaan</button>
-        <button class="reset-settings" data-kiosk="${id}" data-section="screensaver">Herstellen</button>
-      </div>
-      <h3>Camera-popup</h3>
-      <div class="settings-fields">${cameraFields}</div>
-      <div class="actions">
-        <button class="save-settings" data-kiosk="${id}" data-section="camera_popup">Opslaan</button>
-        <button class="reset-settings" data-kiosk="${id}" data-section="camera_popup">Herstellen</button>
-      </div>`;
+    const draftKey = `${kiosk.id}:${section}:${key}`;
+    const current = this._drafts.has(draftKey) ? this._drafts.get(draftKey) : value;
+    const checked = type === "checkbox" && current ? "checked" : "";
+    const bounds = type === "number" ? `min="${min}" max="${max}" step="1"` : "";
+    const val = type === "checkbox" ? "" : `value="${this._escape(current ?? "")}"`;
+    return `<label class="field"><span>${label}</span><input aria-label="${label}" type="${type}" ${type === "number" || type === "color" ? "required" : ""} ${bounds} ${val} ${checked} data-kiosk="${id}" data-section="${section}" data-key="${key}"></label>`;
   }
 
-  _escape(value) {
-    return String(value ?? "")
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;")
-      .replaceAll('"', "&quot;")
-      .replaceAll("'", "&#039;");
+  _settings(kiosk) {
+    const settings = kiosk.settings;
+    if (!settings?.screensaver || !settings?.camera_popup) return `<p class="muted">De tablet heeft nog geen instellingen teruggestuurd.</p><button data-action="get-settings">Instellingen ophalen</button>`;
+    const s = settings.screensaver, c = settings.camera_popup;
+    return `<div class="settings-grid">
+      <section class="setting-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3>
+        ${this._field(kiosk,"screensaver","enabled","Screensaver inschakelen",s.enabled,"checkbox")}
+        ${this._field(kiosk,"screensaver","inactivity_timeout_seconds","Wachttijd (seconden)",s.inactivity_timeout_seconds,"number",5,86400)}
+        ${this._field(kiosk,"screensaver","consume_wake_touch","Eerste tik maakt alleen wakker",s.consume_wake_touch,"checkbox")}
+        <h4>Klok en uiterlijk</h4>
+        ${this._field(kiosk,"screensaver","show_clock","Klok tonen",s.show_clock,"checkbox")}
+        ${this._field(kiosk,"screensaver","show_date","Datum tonen",s.show_date,"checkbox")}
+        ${this._field(kiosk,"screensaver","clock_text_size_sp","Klokgrootte (sp)",s.clock_text_size_sp,"number",12,200)}
+        ${this._field(kiosk,"screensaver","date_text_size_sp","Datumgrootte (sp)",s.date_text_size_sp,"number",10,100)}
+        ${this._field(kiosk,"screensaver","clock_update_interval_seconds","Klokverversing (seconden)",s.clock_update_interval_seconds,"number",1,3600)}
+        ${this._field(kiosk,"screensaver","background_color","Achtergrondkleur",s.background_color || "#000000","color")}
+        ${this._field(kiosk,"screensaver","text_color","Tekstkleur",s.text_color || "#ffffff","color")}
+        <div class="actions"><button data-action="save" data-section="screensaver">Screensaver verzenden</button><button class="secondary" data-action="reset" data-section="screensaver">Herstellen</button></div>
+      </section>
+      <section class="setting-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Camera-popup</h3>
+        ${this._field(kiosk,"camera_popup","width_percent","Breedte (%)",c.width_percent,"number",40,100)}
+        ${this._field(kiosk,"camera_popup","height_percent","Hoogte (%)",c.height_percent,"number",40,100)}
+        ${this._field(kiosk,"camera_popup","dim_percent","Achtergrond verduisteren (%)",c.dim_percent,"number",0,95)}
+        <div class="actions"><button data-action="save" data-section="camera_popup">Camera-popup verzenden</button><button class="secondary" data-action="reset" data-section="camera_popup">Herstellen</button></div>
+      </section></div>`;
+  }
+
+  _overview() {
+    if (!this._kiosks.length) return `<section class="empty"><ha-icon icon="mdi:tablet"></ha-icon><h2>Nog geen kiosken</h2><p>Een kiosk verschijnt hier na een MQTT-statusbericht.</p></section>`;
+    return `<div class="overview-grid">${this._kiosks.map(kiosk => {
+      const state = String(kiosk.availability || "unknown").toLowerCase();
+      const stateClass = ["online", "offline"].includes(state) ? state : "unknown";
+      const status = kiosk.status || {}, battery = kiosk.battery || {};
+      const selected = kiosk.id === this._selectedKiosk;
+      return `<button class="kiosk-card ${selected ? "selected" : ""}" data-action="select" data-kiosk="${this._escape(kiosk.id)}" aria-pressed="${selected}">
+        <span class="card-top"><strong>${this._escape(kiosk.id)}</strong><span class="pill ${stateClass}">${this._escape(state)}</span></span>
+        <span class="metrics"><span><ha-icon icon="mdi:battery"></ha-icon>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</span><span><ha-icon icon="mdi:cctv"></ha-icon>${this._escape(status.camera_state ?? "—")}</span></span>
+        <span class="muted">${battery.charging == null ? "Oplaadstatus onbekend" : battery.charging ? "Opladen" : "Niet aan het opladen"}</span>
+      </button>`;
+    }).join("")}</div>`;
+  }
+
+  _diagnostics(kiosk) {
+    if (!kiosk) return `<p class="muted">Selecteer een kiosk om diagnostiek te bekijken.</p>`;
+    const battery = kiosk.battery || {}, status = kiosk.status || {};
+    return `<dl class="diagnostics"><dt>Verbinding</dt><dd>${this._escape(kiosk.availability || "unknown")}</dd>
+      <dt>Camera</dt><dd>${this._escape(status.camera_state ?? "—")}</dd>
+      <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
+      <dt>Opladen</dt><dd>${this._escape(battery.charging ?? "—")}</dd>
+      <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
+      <dt>Instellingenstatus</dt><dd role="status">${this._escape(this._settingsStatusText(kiosk))}</dd></dl>
+      <button class="secondary" data-action="get-settings">Instellingen opnieuw opvragen</button>`;
+  }
+
+  async _call(service, data, successText) {
+    try {
+      await this._hass.callService("ha_gecko_kiosk", service, data);
+      this._message = successText;
+      this._messageKind = "info";
+      if (["set_screensaver", "set_camera_popup", "reset_settings"].includes(service)) {
+        this._message = "Opdracht verzonden; wachten op bevestiging van de tablet.";
+      }
+    } catch (error) {
+      console.error(`HA-service ${service} mislukt`, error);
+      this._message = `Opdracht mislukt: ${error?.message || "Home Assistant heeft de servicecall afgewezen."}`;
+      this._messageKind = "error";
+    }
+    this._render();
   }
 
   _render() {
     if (!this.shadowRoot) return;
-
-    const active = this.shadowRoot.activeElement;
-    const focusKey = active?.dataset?.focusKey;
-    const scrollTop = this.shadowRoot.scrollTop;
-    const opened = [...this.shadowRoot.querySelectorAll("details[open]")]
-      .map(el => `${el.className}:${el.dataset.kiosk || ""}`);
-    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
-      const key = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
-      this._view.drafts.set(key, input.type === "checkbox" ? input.checked : input.value);
-    }
-
-    const cards = this._kiosks.length
-      ? this._kiosks.map((kiosk) => {
-          const id = this._escape(kiosk.id);
-          const availability = this._escape(kiosk.availability || "unknown");
-          const status = kiosk.status || {};
-          const battery = kiosk.battery || {};
-          const state = String(kiosk.availability || "unknown").toLowerCase();
-          const online = state === "online";
-          const stateClass = online ? "online" : state === "offline" ? "offline" : "unknown";
-          return `
-            <article class="card">
-              <div class="header">
-                <div>
-                  <h2>${id}</h2>
-                  <div class="availability ${stateClass}" role="status" aria-label="Verbinding: ${availability}">
-                    ${availability}
-                  </div>
-                </div>
-                <div class="battery" aria-label="Batterij">${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</div>
-              </div>
-
-              <dl>
-                <dt>Camera</dt><dd>${this._escape(status.camera_state ?? "—")}</dd>
-                <dt>Opladen</dt><dd>${this._escape(battery.charging ?? "—")}</dd>
-                <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
-              </dl>
-
-              <details class="controls">
-              <summary>Bediening</summary>
-              <h3>Screensaver</h3>
-              <div class="actions">
-                <button data-kiosk="${id}" data-command="screensaver" data-value="ON">Tonen</button>
-                <button data-kiosk="${id}" data-command="screensaver" data-value="OFF">Verbergen</button>
-              </div>
-              <details class="settings" data-kiosk="${id}">
-                <summary>Tabletinstellingen</summary>
-                ${this._settingsMarkup(kiosk)}
-              </details>
-              <h3>Deurbelcamera</h3>
-              <div class="actions">
-                <button data-kiosk="${id}" data-value="prewarm" aria-label="Camera voorladen">Voorladen</button>
-                <button data-kiosk="${id}" data-value="show" aria-label="Camera tonen">Tonen</button>
-                <button data-kiosk="${id}" data-value="hide" aria-label="Camera verbergen">Verbergen</button>
-                <button data-kiosk="${id}" data-value="stop" aria-label="Camera stoppen">Stoppen</button>
-              </div>
-              </details>
-            </article>`;
-        }).join("")
-      : `<div class="empty">Nog geen kiosken gevonden. Een kiosk verschijnt na een MQTT-statusbericht.</div>`;
-
-    const availabilityMessage = this._error ? `<div class="error" role="alert">${this._escape(this._error)}</div>` : "";
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        :host {
-          display: block;
-          min-height: 100%;
-          box-sizing: border-box;
-          padding: clamp(12px, 3vw, 28px);
-          color: var(--primary-text-color);
-          background: var(--primary-background-color);
-          font-family: var(--paper-font-body1_-_font-family, sans-serif);
-        }
-        h1 { margin: 0 0 20px; font-size: 28px; display:flex; align-items:center; gap:12px; }
-        .brand { width:34px; height:34px; object-fit:contain; }
-        .error { margin: 12px 0; padding: 12px; border-inline-start: 4px solid var(--error-color, #b3261e); background: var(--card-background-color); }
-        .grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
-          gap: 16px;
-        }
-        .card {
-          background: var(--card-background-color);
-          border-radius: var(--ha-card-border-radius, 12px);
-          box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.15));
-          padding: 18px;
-        }
-        .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-        h2 { margin: 0; font-size: 20px; }
-        h3 { margin: 18px 0 8px; font-size: 14px; font-weight: 600; }
-        .availability { margin-top: 4px; font-size: 13px; text-transform: uppercase; }
-        .online { color: var(--success-color, #43a047); }
-        .offline { color: var(--error-color, #db4437); }
-        .unknown { color: var(--secondary-text-color); }
-        .battery { font-size: 24px; font-weight: 500; }
-        dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 18px 0 0; }
-        dt { color: var(--secondary-text-color); }
-        dd { margin: 0; text-align: right; }
-        .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-        button {
-          border: none;
-          border-radius: 18px;
-          padding: 8px 14px;
-          cursor: pointer;
-          background: var(--primary-color);
-          color: var(--text-primary-color, white);
-          font: inherit;
-        }
-        button:active { transform: scale(.97); }
-        button { min-height: 44px; }
-        button:focus-visible, summary:focus-visible, input:focus-visible { outline: 3px solid var(--primary-color); outline-offset: 2px; }
-        .empty { color: var(--secondary-text-color); padding: 24px 0; }
-        details.settings { margin-top: 18px; padding: 12px 0; border-top: 1px solid var(--divider-color); }
-        details.settings summary { cursor: pointer; font-size: 16px; font-weight: 600; margin-bottom: 12px; }
-        .settings-help { font-size: 12px; color: var(--secondary-text-color); margin: 10px 0; }
-        .settings-fields { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
-        .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; }
-        .setting-row input[type=number] { width: 98px; }
-        .setting-row input[type=color] { width: 50px; }
-        .setting-row input { background: var(--input-fill-color, var(--card-background-color)); color: var(--primary-text-color);
-          border: 1px solid var(--divider-color); border-radius: 6px; padding: 6px; }
-        .settings button { background: var(--secondary-background-color, #333); }
-        .settings button.save-settings { background: var(--primary-color); }
+    const state = this._captureState();
+    const kiosk = this._selected();
+    const tabs = [["overview","Overzicht","mdi:view-dashboard"],["controls","Bediening","mdi:gesture-tap-button"],["settings","Instellingen","mdi:cog-outline"],["diagnostics","Diagnostiek","mdi:heart-pulse"]];
+    let content = "";
+    if (this._tab === "overview") content = this._overview();
+    if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2><div class="control-grid">
+      <div class="control-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3><button data-action="device" data-command="screensaver" data-value="ON">Tonen</button><button class="secondary" data-action="device" data-command="screensaver" data-value="OFF">Verbergen</button></div>
+      <div class="control-group"><h3><ha-icon icon="mdi:cctv"></ha-icon> Deurbelcamera</h3><button data-action="camera" data-value="prewarm">Voorladen</button><button data-action="camera" data-value="show">Tonen</button><button class="secondary" data-action="camera" data-value="hide">Verbergen</button><button class="secondary" data-action="camera" data-value="stop">Stoppen</button></div>
+    </div></section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
+    if (this._tab === "settings") content = kiosk ? `<section class="surface"><h2>Instellingen <span class="muted">${this._escape(kiosk.id)}</span></h2><p class="notice" role="status">${this._escape(this._settingsStatusText(kiosk))}</p><p class="muted">Een verzonden opdracht is pas toegepast nadat de tablet deze heeft bevestigd.</p>${this._settings(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
+    if (this._tab === "diagnostics") content = `<section class="surface"><h2>Diagnostiek</h2>${this._diagnostics(kiosk)}</section>`;
+    this.shadowRoot.innerHTML = `<style>
+      :host{display:block;box-sizing:border-box;min-height:100%;padding:clamp(12px,3vw,28px);color:var(--primary-text-color);background:var(--primary-background-color);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
+      *{box-sizing:border-box}header{display:flex;align-items:center;gap:14px;margin:0 0 20px}.brand{width:40px;height:40px;object-fit:contain}h1{font-size:clamp(22px,4vw,30px);margin:0}h2{font-size:20px;margin:0 0 16px}h3{font-size:16px;margin:0 0 12px}h4{margin:16px 0 8px}.muted{color:var(--secondary-text-color);font-weight:400;font-size:.9em}
+      nav{display:flex;gap:8px;overflow-x:auto;border-bottom:1px solid var(--divider-color);margin-bottom:20px}nav button{white-space:nowrap;border-radius:10px 10px 0 0;background:transparent;color:var(--secondary-text-color);border-bottom:3px solid transparent}nav button[aria-current=page]{color:var(--primary-text-color);border-bottom-color:var(--primary-color)}
+      button{font:inherit;min-height:44px;padding:9px 14px;border:0;border-radius:10px;background:var(--primary-color);color:var(--text-primary-color,white);cursor:pointer}button.secondary{background:var(--secondary-background-color);color:var(--primary-text-color)}button:hover{filter:brightness(1.08)}button:focus-visible,input:focus-visible{outline:3px solid var(--primary-color);outline-offset:2px}
+      .overview-grid,.control-grid,.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px}.kiosk-card,.surface,.setting-group,.empty{display:block;text-align:left;background:var(--card-background-color);color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:var(--ha-card-border-radius,14px);box-shadow:var(--ha-card-box-shadow,0 2px 6px rgba(0,0,0,.12));padding:18px}.kiosk-card{width:100%}.kiosk-card.selected{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}.card-top,.metrics{display:flex;align-items:center;justify-content:space-between;gap:12px}.metrics{justify-content:flex-start;margin:18px 0 12px}.metrics span{display:inline-flex;align-items:center;gap:6px}.pill{border-radius:99px;padding:5px 10px;font-size:12px;text-transform:capitalize}.pill.online{color:var(--success-color,#2e7d32);background:color-mix(in srgb,var(--success-color,#2e7d32) 14%,transparent)}.pill.offline{color:var(--error-color,#b3261e);background:color-mix(in srgb,var(--error-color,#b3261e) 14%,transparent)}.pill.unknown{color:var(--secondary-text-color);background:var(--secondary-background-color)}
+      .control-group,.setting-group{display:flex;flex-direction:column;align-items:flex-start;gap:10px}.field{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;min-height:42px;width:100%}.field input[type=number]{width:112px}.field input[type=color]{width:54px;height:38px}.field input{font:inherit;color:var(--primary-text-color);background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:8px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.diagnostics{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,2fr);gap:10px 16px}.diagnostics dt{color:var(--secondary-text-color)}.diagnostics dd{margin:0;overflow-wrap:anywhere}.notice{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:var(--secondary-background-color);border-inline-start:4px solid var(--primary-color)}.notice.error{border-color:var(--error-color,#b3261e)}ha-icon{--mdc-icon-size:20px;vertical-align:middle;margin-inline-end:5px}
+      @media(max-width:600px){.surface,.setting-group,.kiosk-card{padding:14px}.diagnostics{grid-template-columns:1fr auto}.field{grid-template-columns:1fr auto}nav{margin-inline:-4px}}
       </style>
-      <h1><img class="brand" src="/ha_gecko_kiosk_static/icon.png" alt="">Gecko-kiosken</h1>
-      ${availabilityMessage}
-      <div class="grid">${cards}</div>
-    `;
-
-    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
-      const key = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
-      if (this._view.drafts.has(key)) {
-        if (input.type === "checkbox") input.checked = this._view.drafts.get(key);
-        else input.value = this._view.drafts.get(key);
-      }
-      input.dataset.focusKey = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+      <header><img class="brand" src="/ha_gecko_kiosk_static/icon.png" alt=""><h1>Gecko-kiosken</h1></header>
+      <nav aria-label="Kioskbeheer">${tabs.map(([id,label,icon])=>`<button data-action="tab" data-tab="${id}" aria-current="${this._tab===id?"page":"false"}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`).join("")}</nav>
+      ${this._message?`<div class="notice ${this._messageKind}" role="${this._messageKind==="error"?"alert":"status"}">${this._escape(this._message)}</div>`:""}${content}`;
+    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) input.dataset.focusKey=`${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+    for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
+      button.dataset.focusKey = [button.dataset.action, button.dataset.tab, button.dataset.kiosk, button.dataset.section, button.dataset.value].join(":");
     }
-    for (const details of this.shadowRoot.querySelectorAll("details")) {
-      if (opened.includes(`${details.className}:${details.dataset.kiosk || ""}`)) details.open = true;
-    }
-    this.shadowRoot.scrollTop = scrollTop;
-    if (focusKey) this.shadowRoot.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
+    this.shadowRoot.scrollTop=state.scrollTop;
+    if (state.scrollTop && window.scrollY !== state.scrollTop) window.scrollTo(0, state.scrollTop);
+    if(state.focus) [...this.shadowRoot.querySelectorAll("[data-focus-key]")]
+      .find(item => item.dataset.focusKey === state.focus)?.focus({preventScroll:true});
+    this.shadowRoot.querySelectorAll("button[data-action]").forEach(button=>button.addEventListener("click",()=>this._handleAction(button)));
+  }
 
-    this.shadowRoot.querySelectorAll("button[data-command], button[data-value]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        try {
-          button.disabled = true;
-          if (button.dataset.command) {
-            await this._device(button.dataset.kiosk, button.dataset.command, button.dataset.value);
-          } else {
-            await this._camera(button.dataset.kiosk, button.dataset.value);
-          }
-          window.setTimeout(() => this._refresh(), 250);
-        } catch (error) {
-          console.error("Opdracht naar kiosk mislukt", error);
-          this._error = "De opdracht kon niet worden verzonden. Controleer de integratiestatus en probeer opnieuw.";
-          this._render();
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
-    this.shadowRoot.querySelectorAll(".refresh-settings").forEach(button => {
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        try {
-          await this._hass.callService("ha_gecko_kiosk", "get_settings", {kiosk: button.dataset.kiosk});
-        } catch (error) {
-          console.error("Kan kioskinstellingen niet ophalen", error);
-          this._error = "Instellingen konden niet worden opgevraagd. Controleer de integratiestatus en probeer opnieuw.";
-          this._render();
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
-    this.shadowRoot.querySelectorAll(".save-settings").forEach(button => {
-      button.addEventListener("click", async () => {
-        const section = button.dataset.section;
-        const parent = button.closest("details.settings");
-        const inputs = [...parent.querySelectorAll(`[data-section="${section}"][data-key]`)];
-        if (inputs.some(x => !x.checkValidity())) {
-          inputs.find(x => !x.checkValidity())?.reportValidity();
-          return;
-        }
-        const payload = {kiosk: button.dataset.kiosk};
-        for (const input of inputs) {
-          payload[input.dataset.key] = input.type === "checkbox" ? input.checked
-            : input.type === "number" ? Number(input.value) : input.value;
-        }
-        button.disabled = true;
-        try {
-          await this._hass.callService("ha_gecko_kiosk",
-            section === "screensaver" ? "set_screensaver" : "set_camera_popup", payload);
-          parent.open = false;
-          // An HA service call only confirms MQTT publication, not tablet application.
-          window.setTimeout(() => this._refresh(), 600);
-        } catch (error) {
-          console.error("Kan instellingen niet verzenden", error);
-          this._error = "Instellingen konden niet worden verzonden. Je invoer is behouden; probeer opnieuw.";
-          this._render();
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
-    this.shadowRoot.querySelectorAll(".reset-settings").forEach(button => {
-      button.addEventListener("click", async () => {
-        if (!window.confirm("Instellingen herstellen naar de oorspronkelijke kioskconfiguratie?")) return;
-        button.disabled = true;
-        try {
-          await this._hass.callService("ha_gecko_kiosk", "reset_settings", {
-            kiosk: button.dataset.kiosk, section: button.dataset.section,
-          });
-          button.closest("details.settings").open = false;
-          window.setTimeout(() => this._refresh(), 600);
-        } catch (error) {
-          console.error("Kan instellingen niet herstellen", error);
-          this._error = "Instellingen konden niet worden hersteld. Controleer de verbinding en probeer opnieuw.";
-          this._render();
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
+  async _handleAction(button) {
+    const action=button.dataset.action, kiosk=button.dataset.kiosk||this._selectedKiosk;
+    if(action==="tab"){this._tab=button.dataset.tab;this._message="";this._render();return;}
+    if(action==="select"){this._selectedKiosk=kiosk;this._message="";this._render();return;}
+    if(action==="device"){await this._call("device",{kiosk,command:button.dataset.command,value:button.dataset.value},"Opdracht verzonden.");return;}
+    if(action==="camera"){await this._call("camera",{kiosk,action:button.dataset.value,camera:"doorbell"},"Cameraopdracht verzonden.");return;}
+    if(action==="get-settings"){await this._call("get_settings",{kiosk},"Instellingen opgevraagd.");return;}
+    if(action==="reset"){
+      if(!window.confirm("Instellingen herstellen naar de oorspronkelijke kioskconfiguratie?"))return;
+      await this._call("reset_settings",{kiosk,section:button.dataset.section},"Herstelopdracht verzonden; wachten op tabletbevestiging.");return;
+    }
+    if(action==="save"){
+      const section=button.dataset.section, fields=[...this.shadowRoot.querySelectorAll("[data-kiosk][data-section][data-key]")]
+        .filter(field => field.dataset.kiosk === kiosk && field.dataset.section === section);
+      const invalid=fields.find(field=>!field.checkValidity());if(invalid){invalid.reportValidity();return;}
+      const payload={kiosk};for(const field of fields)payload[field.dataset.key]=field.type==="checkbox"?field.checked:field.type==="number"?Number(field.value):field.value;
+      await this._call(section==="screensaver"?"set_screensaver":"set_camera_popup",payload,"Instellingen verzonden; wachten op tabletbevestiging.");
+    }
   }
 }
 

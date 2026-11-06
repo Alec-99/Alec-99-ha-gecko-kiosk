@@ -22,3 +22,5 @@ __pycache__/
 local.properties
 **/build/
 *.pyc
+
+node_modules/

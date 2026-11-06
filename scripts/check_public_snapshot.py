@@ -21,7 +21,7 @@ approved_pngs = {
 }
 problems = []
 for path in root.rglob("*"):
-    if not path.is_file() or ".git" in path.parts or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
+    if not path.is_file() or ".git" in path.parts or "node_modules" in path.parts or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
         continue
     rel = path.relative_to(root).as_posix()
     if rel.startswith(forbidden):
