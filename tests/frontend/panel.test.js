@@ -13,6 +13,8 @@ function kiosk(id, availability = 'online', capabilities) {
   const device = {
     id, availability,
     status: { camera_state: 'hidden' },
+    display: { power: 'ON', brightness_percent: '62', power_control_ready: 'false' },
+    audio: { volume_percent: '31', muted: 'false' },
     battery: { level: 87, charging: false, temperature: 29 },
     settings: {
       screensaver: {
@@ -93,8 +95,8 @@ test('navigation exposes distinct overview, controls, settings and diagnostics s
 test('existing screen and camera actions call the original HA services and payloads', async () => {
   setup([kiosk('alpha')]);
   await click('[data-tab="controls"]');
-  await click('[data-action="device"][data-value="ON"]');
-  await click('[data-action="device"][data-value="OFF"]');
+  await click('[data-action="device"][data-command="screensaver"][data-value="ON"]');
+  await click('[data-action="device"][data-command="screensaver"][data-value="OFF"]');
   for (const action of ['prewarm', 'show', 'hide', 'stop']) await click(`[data-action="camera"][data-value="${action}"]`);
   assert.deepEqual(calls.map(([domain, service]) => [domain, service]), [
     ['ha_gecko_kiosk','device'], ['ha_gecko_kiosk','device'],
@@ -116,7 +118,7 @@ test('capability manifests show only supported controls and legacy kiosks keep b
   await click('[data-tab="controls"]');
   assert.equal(panel.shadowRoot.querySelector('[data-action="device"][data-command="screensaver"]'), null);
   assert.equal(panel.shadowRoot.querySelector('[data-action="camera"]'), null);
-  assert.match(panel.shadowRoot.textContent, /geen bedienbare capabilities/);
+  assert.ok(panel.shadowRoot.querySelector('[data-action="device"][data-command="screen"]'));
   await click('[data-tab="diagnostics"]');
   assert.match(panel.shadowRoot.textContent, /display\.power/);
 
@@ -130,6 +132,37 @@ test('capability manifests show only supported controls and legacy kiosks keep b
   await click('[data-tab="settings"]');
   assert.ok(panel.shadowRoot.querySelector('[data-section="screensaver"]'));
   assert.equal(panel.shadowRoot.querySelector('[data-section="camera_popup"]'), null);
+});
+
+test('generic display and audio capabilities expose controls, honor readiness and preserve slider drafts', async () => {
+  const device = kiosk('generic', 'online', {
+    compatible: true, protocol_version: 1,
+    capabilities: ['display.power', 'display.brightness', 'audio.volume', 'audio.mute', 'dashboard.reload'],
+  });
+  setup([device]);
+  await click('[data-tab="controls"]');
+  assert.ok(panel.shadowRoot.querySelector('[data-action="device"][data-command="screen"][data-value="ON"]'));
+  assert.equal(panel.shadowRoot.querySelector('[data-action="device"][data-command="screen"][data-value="OFF"]').disabled, true);
+  assert.equal(panel.shadowRoot.querySelectorAll('[data-control-key]').length, 2);
+  assert.ok(panel.shadowRoot.querySelector('[data-command="reload_dashboard"]'));
+  assert.equal(panel.shadowRoot.querySelector('[data-command="mute"]').dataset.value, 'ON');
+  device.audio.muted = 'ON'; panel._render();
+  assert.equal(panel.shadowRoot.querySelector('[data-command="mute"]').dataset.value, 'OFF');
+  const brightness = panel.shadowRoot.querySelector('[data-control-key="brightness_percent"]');
+  brightness.value = '77'; brightness.dispatchEvent(new dom.window.Event('input', { bubbles: true })); brightness.focus();
+  list = [kiosk('generic', 'online', device.capabilities)];
+  await panel._refresh();
+  const restored = panel.shadowRoot.querySelector('[data-control-key="brightness_percent"]');
+  assert.equal(restored.value, '77');
+  assert.equal(panel.shadowRoot.activeElement, restored);
+  await click('[data-action="control"][data-command="brightness"]');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[0][2])), {
+    kiosk: 'generic', command: 'brightness', value: '77',
+  });
+  await click('[data-action="device"][data-command="mute"]');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1][2])), {
+    kiosk: 'generic', command: 'mute', value: 'ON',
+  });
 });
 
 test('an unsupported protocol manifest disables controls and explains why', async () => {

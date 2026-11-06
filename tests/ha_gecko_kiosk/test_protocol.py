@@ -203,6 +203,44 @@ class ProtocolTest(unittest.TestCase):
         )
         self.assertEqual(["entry_cam", "yard"], manifest["resources"]["cameras"])
 
+    def test_display_and_audio_state_topics_are_kept_separate_and_bounded(self):
+        for topic, payload in (
+            ("ha_kiosk/tablet_a/display/power", "ON"),
+            ("ha_kiosk/tablet_a/display/brightness_percent", "42"),
+            ("ha_kiosk/tablet_a/display/power_control_ready", "false"),
+            ("ha_kiosk/tablet_a/audio/volume_percent", "25"),
+            ("ha_kiosk/tablet_a/audio/muted", "true"),
+        ):
+            kiosk._handle_device_state(self.hass, types.SimpleNamespace(topic=topic, payload=payload))
+        state = kiosk._ensure_kiosk(self.hass, "tablet_a")
+        self.assertEqual("ON", state["display"]["power"])
+        self.assertEqual("42", state["display"]["brightness_percent"])
+        self.assertEqual("25", state["audio"]["volume_percent"])
+        self.assertEqual("true", state["audio"]["muted"])
+        kiosk._handle_device_state(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/display/unexpected", payload="ignored"))
+        kiosk._handle_device_state(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/display/power", payload="x" * 129))
+        self.assertNotIn("unexpected", state["display"])
+        self.assertEqual("ON", state["display"]["power"])
+
+    def test_screen_power_off_fails_closed_when_device_admin_is_not_ready(self):
+        kiosk._handle_status(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/status/capabilities",
+            payload=json.dumps({"schema": 1, "protocol_version": 1,
+                               "capabilities": ["display.power"]}),
+        ))
+        kiosk._handle_device_state(self.hass, types.SimpleNamespace(
+            topic="ha_kiosk/tablet_a/display/power_control_ready", payload="false"))
+        with self.assertRaisesRegex(kiosk.vol.Invalid, "device-admin"):
+            asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+                "kiosk": "tablet_a", "command": "screen", "value": "OFF",
+            })))
+        asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+            "kiosk": "tablet_a", "command": "screen", "value": "ON",
+        })))
+        self.assertEqual("ha_kiosk/tablet_a/command/device/screen", self.hass.publishes[-1][0])
+
     def test_invalid_or_unsupported_capability_manifest_fails_closed(self):
         for payload in (
             "not-json",

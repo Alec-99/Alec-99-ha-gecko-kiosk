@@ -75,6 +75,17 @@ class HaGeckoKioskPanel extends HTMLElement {
 
   _controls(kiosk) {
     const groups = [];
+    const display = kiosk?.display || {}, audio = kiosk?.audio || {};
+    const readiness = String(display.power_control_ready ?? "").toLowerCase();
+    const powerOffUnavailable = ["false", "off", "0", "no"].includes(readiness);
+    if (this._supports(kiosk, "display.power")) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:monitor"></ha-icon> Scherm</h3><p class="muted">Status: ${this._escape(display.power ?? "onbekend")}${display.power_state_detail ? ` · ${this._escape(display.power_state_detail)}` : ""}</p><div class="actions"><button data-action="device" data-command="screen" data-value="ON">Inschakelen</button><button class="secondary" data-action="device" data-command="screen" data-value="OFF" ${powerOffUnavailable ? "disabled title=\"Scherm uitschakelen vereist apparaatbeheer\"" : ""}>Uitschakelen</button></div>${powerOffUnavailable ? `<p class="muted" role="status">Uitschakelen vereist apparaatbeheer op de kiosk.</p>` : ""}</div>`);
+    if (this._supports(kiosk, "display.brightness")) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:brightness-6"></ha-icon> Helderheid</h3>${this._controlRange(kiosk, "display", "brightness_percent", "Helderheid (%)", display.brightness_percent)}<button data-action="control" data-command="brightness" data-target="display:brightness_percent">Helderheid toepassen</button></div>`);
+    if (this._supports(kiosk, "audio.volume") || this._supports(kiosk, "audio.mute")) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:volume-high"></ha-icon> Audio</h3>${this._supports(kiosk, "audio.volume") ? `${this._controlRange(kiosk, "audio", "volume_percent", "Volume (%)", audio.volume_percent)}<button data-action="control" data-command="volume" data-target="audio:volume_percent">Volume toepassen</button>` : ""}${this._supports(kiosk, "audio.mute") ? `<button class="secondary" data-action="device" data-command="mute" data-value="${this._isTrue(audio.muted) ? "OFF" : "ON"}">${this._isTrue(audio.muted) ? "Geluid inschakelen" : "Dempen"}</button>` : ""}</div>`);
+    if (this._supports(kiosk, "dashboard.reload")) groups.push(`
+      <div class="control-group"><h3><ha-icon icon="mdi:refresh"></ha-icon> Dashboard</h3><button data-action="device" data-command="reload_dashboard" data-value="reload">Dashboard vernieuwen</button></div>`);
     if (this._supports(kiosk, "screensaver.activate")) groups.push(`
       <div class="control-group"><h3><ha-icon icon="mdi:weather-night"></ha-icon> Schermbeveiliging</h3><button data-action="device" data-command="screensaver" data-value="ON">Tonen</button><button class="secondary" data-action="device" data-command="screensaver" data-value="OFF">Verbergen</button></div>`);
     const manifest = kiosk?.capabilities;
@@ -86,6 +97,14 @@ class HaGeckoKioskPanel extends HTMLElement {
     if (groups.length) return `<div class="control-grid">${groups.join("")}</div>`;
     if (kiosk?.capabilities?.compatible === false) return `<p class="muted" role="status">Dit apparaat gebruikt een niet-ondersteunde capabilityversie. De bediening is uitgeschakeld.</p>`;
     return `<p class="muted" role="status">Dit apparaat heeft geen bedienbare capabilities opgegeven.</p>`;
+  }
+
+  _controlRange(kiosk, section, key, label, value) {
+    const draftKey = `${kiosk.id}:${section}:${key}`;
+    const parsed = Number(value);
+    const serverValue = Number.isFinite(parsed) ? String(Math.max(0, Math.min(100, parsed))) : "";
+    const current = this._drafts.has(draftKey) ? this._drafts.get(draftKey) : serverValue;
+    return `<label class="field range-field"><span>${label}<output>${this._escape(current || "—")}</output></span><input type="range" min="0" max="100" step="1" value="${this._escape(current)}" aria-label="${label}" data-control-section="${section}" data-control-key="${key}" data-control-kiosk="${this._escape(kiosk.id)}" data-server-value="${this._escape(JSON.stringify(serverValue))}"></label>`;
   }
 
   _settingsStatusText(kiosk) {
@@ -116,6 +135,11 @@ class HaGeckoKioskPanel extends HTMLElement {
       const value = input.type === "checkbox" ? input.checked : input.value;
       if (JSON.stringify(value) === input.dataset.serverValue) this._drafts.delete(key);
       else this._drafts.set(key, value);
+    }
+    for (const input of this.shadowRoot.querySelectorAll("[data-control-section][data-control-key]")) {
+      const key = `${input.dataset.controlKiosk}:${input.dataset.controlSection}:${input.dataset.controlKey}`;
+      if (JSON.stringify(String(input.value)) === input.dataset.serverValue) this._drafts.delete(key);
+      else this._drafts.set(key, String(input.value));
     }
     return { focus, scrolls, navLeft, windowPosition };
   }
@@ -168,6 +192,8 @@ class HaGeckoKioskPanel extends HTMLElement {
     return "Oplaadstatus onbekend";
   }
 
+  _isTrue(value) { return [true, "true", "on", "1"].includes(typeof value === "string" ? value.toLowerCase() : value); }
+
   _overview() {
     if (!this._kiosks.length) return `<section class="empty"><ha-icon icon="mdi:tablet"></ha-icon><h2>Nog geen kiosken</h2><p>Een kiosk verschijnt hier na een MQTT-statusbericht.</p></section>`;
     return `<div class="overview-grid">${this._kiosks.map(kiosk => {
@@ -194,6 +220,11 @@ class HaGeckoKioskPanel extends HTMLElement {
     return `<dl class="diagnostics"><dt>Verbinding</dt><dd>${this._escape(kiosk.availability || "unknown")}</dd>
       <dt>Protocol</dt><dd>${this._escape(capabilityText)}</dd>
       <dt>Camera</dt><dd>${this._escape(status.camera_state ?? "—")}</dd>
+      <dt>Scherm</dt><dd>${this._escape(kiosk.display?.power ?? "—")}${kiosk.display?.power_state_detail ? ` · ${this._escape(kiosk.display.power_state_detail)}` : ""}</dd>
+      <dt>Helderheid</dt><dd>${this._escape(kiosk.display?.brightness_percent ?? "—")}${kiosk.display?.brightness_percent == null ? "" : "%"}</dd>
+      <dt>Power-bediening gereed</dt><dd>${this._escape(kiosk.display?.power_control_ready ?? "—")}</dd>
+      <dt>Volume</dt><dd>${this._escape(kiosk.audio?.volume_percent ?? "—")}${kiosk.audio?.volume_percent == null ? "" : "%"}</dd>
+      <dt>Gedempt</dt><dd>${this._escape(kiosk.audio?.muted ?? "—")}</dd>
       <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
       <dt>Opladen</dt><dd>${this._chargingText(battery.charging)}</dd>
       <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
@@ -277,6 +308,19 @@ class HaGeckoKioskPanel extends HTMLElement {
       input.addEventListener("input", rememberDraft);
       input.addEventListener("change", rememberDraft);
     }
+    for (const input of this.shadowRoot.querySelectorAll("[data-control-section][data-control-key]")) {
+      input.dataset.focusKey = `${input.dataset.controlKiosk}:${input.dataset.controlSection}:${input.dataset.controlKey}`;
+      const rememberDraft = () => {
+        const key = `${input.dataset.controlKiosk}:${input.dataset.controlSection}:${input.dataset.controlKey}`;
+        const value = String(input.value);
+        if (JSON.stringify(value) === input.dataset.serverValue) this._drafts.delete(key);
+        else this._drafts.set(key, value);
+        const output = input.parentElement.querySelector("output");
+        if (output) output.textContent = value;
+      };
+      input.addEventListener("input", rememberDraft);
+      input.addEventListener("change", rememberDraft);
+    }
     for (const button of this.shadowRoot.querySelectorAll("button[data-action]")) {
       button.dataset.focusKey = [button.dataset.action, button.dataset.tab, button.dataset.kiosk, button.dataset.section, button.dataset.value].join(":");
     }
@@ -291,7 +335,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     if(state.focus) [...this.shadowRoot.querySelectorAll("[data-focus-key]")]
       .find(item => item.dataset.focusKey === state.focus)?.focus({preventScroll:true});
     this.shadowRoot.querySelectorAll("button[data-action]").forEach(button => {
-      if (!["tab", "select", "discard"].includes(button.dataset.action)) button.disabled = this._busy;
+      button.disabled = button.disabled || this._busy;
       button.addEventListener("click", () => this._handleAction(button));
     });
   }
@@ -309,6 +353,13 @@ class HaGeckoKioskPanel extends HTMLElement {
       return;
     }
     if(action==="device"){await this._call("device",{kiosk,command:button.dataset.command,value:button.dataset.value},"Opdracht verzonden.");return;}
+    if(action==="control"){
+      const [section, key] = button.dataset.target.split(":");
+      const input = [...this.shadowRoot.querySelectorAll("[data-control-kiosk]")].find(item =>
+        item.dataset.controlKiosk === kiosk && item.dataset.controlSection === section && item.dataset.controlKey === key);
+      if (!input || !/^\d{1,3}$/.test(input.value) || Number(input.value) > 100) return;
+      await this._call("device",{kiosk,command:button.dataset.command,value:input.value},button.dataset.command === "brightness" ? "Helderheid verzonden." : "Volume verzonden.");return;
+    }
     if(action==="camera"){await this._call("camera",{kiosk,action:button.dataset.value,camera:button.dataset.camera||"doorbell"},"Cameraopdracht verzonden.");return;}
     if(action==="get-settings"){await this._call("get_settings",{kiosk},"Instellingen opgevraagd.");return;}
     if(action==="reset"){

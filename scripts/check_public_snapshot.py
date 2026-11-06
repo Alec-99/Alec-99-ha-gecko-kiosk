@@ -17,8 +17,12 @@ allowed_suffixes = {".py", ".js", ".json", ".md", ".yml", ".yaml", ".toml", ".xm
 approved_pngs = {
     "custom_components/ha_gecko_kiosk/brand/icon.png": (256, 256),
     "custom_components/ha_gecko_kiosk/brand/icon@2x.png": (512, 512),
-    "custom_components/ha_gecko_kiosk/frontend/icon.png": (256, 256),
+    "custom_components/ha_gecko_kiosk/frontend/icon.png": (512, 512),
+    "assets/brand/icon-512.png": (512, 512),
+    "assets/brand/github-social-1280x640.png": (1280, 640),
+    "assets/brand/github-readme-banner-1600x400.png": (1600, 400),
 }
+approved_svgs = {"assets/brand/icon.svg"}
 problems = []
 for path in root.rglob("*"):
     if not path.is_file() or ".git" in path.parts or "node_modules" in path.parts or "__pycache__" in path.parts or ".pytest_cache" in path.parts:
@@ -34,7 +38,7 @@ for path in root.rglob("*"):
         elif struct.unpack(">II", data[16:24]) != approved_pngs[rel]:
             problems.append((rel, "unexpected PNG dimensions"))
         continue
-    if path.suffix not in allowed_suffixes:
+    if path.suffix not in allowed_suffixes and rel not in approved_svgs:
         if rel != ".gitignore":
             problems.append((rel, "unapproved file type"))
         continue

@@ -135,6 +135,8 @@ def _ensure_kiosk(hass: HomeAssistant, kiosk_id: str) -> dict[str, Any]:
             "availability": "unknown",
             "status": {},
             "battery": {},
+            "display": {},
+            "audio": {},
         },
     )
 
@@ -162,6 +164,21 @@ def _handle_status(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
         kiosk["capabilities"] = _parse_capability_manifest(message.payload)
         return
     kiosk["status"][parts[3]] = str(message.payload)
+
+
+@callback
+def _handle_device_state(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
+    """Keep the kiosk's public display/audio read model available to the panel."""
+    parts = _topic_parts(message)
+    if (len(parts) != 4 or parts[0] != TOPIC_PREFIX
+            or parts[2] not in ("display", "audio")
+            or parts[3] not in {"power", "power_state_detail", "power_control_ready",
+                                "brightness_percent", "volume_percent", "muted"}):
+        return
+    value = str(message.payload).strip()
+    if len(value) > 128:
+        return
+    _ensure_kiosk(hass, parts[1])[parts[2]][parts[3]] = value
 
 
 def _parse_capability_manifest(payload: str) -> dict[str, Any]:
@@ -378,6 +395,10 @@ async def _service_device(hass: HomeAssistant, call: ServiceCall) -> None:
         "system": "dashboard.reload",
     }[command]
     _require_capability(hass, kiosk, capability)
+    if command == "screen" and payload == "OFF":
+        readiness = _state(hass).get(kiosk, {}).get("display", {}).get("power_control_ready")
+        if readiness is not None and readiness.lower() in ("false", "off", "0", "no"):
+            raise vol.Invalid("Display power-off is unavailable until device-admin access is enabled")
     await mqtt.async_publish(
         hass, _kiosk_topic(kiosk, f"command/device/{command}") if command != "system"
         else _kiosk_topic(kiosk, "command/system"),
@@ -582,6 +603,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             qos=1,
         )
     )
+    for subsystem in ("display", "audio"):
+        unsubs.append(
+            await mqtt.async_subscribe(
+                hass,
+                f"{TOPIC_PREFIX}/+/{subsystem}/+",
+                lambda msg: _handle_device_state(hass, msg),
+                qos=1,
+            )
+        )
 
     unsubs.append(
         await mqtt.async_subscribe(
