@@ -4,7 +4,7 @@
 
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
-**Integration version:** `0.2.1` · **Domain:** `ha_gecko_kiosk`.
+**Integration version:** `0.2.2` · **Domain:** `ha_gecko_kiosk`.
 
 ## Installeren in Home Assistant (HACS / Marketplace)
 

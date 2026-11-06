@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 import re
 import time
 from uuid import uuid4
@@ -640,6 +641,7 @@ def websocket_list_kiosks(
 async def _register_panel(hass: HomeAssistant) -> None:
     integration_dir = Path(__file__).parent
     frontend_dir = integration_dir / "frontend"
+    panel_version = sha256((frontend_dir / "ha-gecko-kiosk-panel.js").read_bytes()).hexdigest()[:12]
 
     await hass.http.async_register_static_paths(
         [StaticPathConfig(STATIC_URL, str(frontend_dir), cache_headers=False)]
@@ -651,7 +653,7 @@ async def _register_panel(hass: HomeAssistant) -> None:
         sidebar_title="Gecko-kiosken",
         sidebar_icon="mdi:tablet",
         webcomponent_name="ha-gecko-kiosk-panel",
-        module_url=f"{STATIC_URL}/ha-gecko-kiosk-panel.js",
+        module_url=f"{STATIC_URL}/ha-gecko-kiosk-panel.js?v={panel_version}",
         embed_iframe=False,
         require_admin=True,
     )
