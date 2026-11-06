@@ -27,6 +27,7 @@ function kiosk(id, availability = 'online') {
 }
 
 function setup(kiosks = []) {
+  dom?.window.close();
   dom = new JSDOM('<!doctype html><body></body>', { runScripts: 'outside-only', url: 'http://localhost' });
   dom.window.console.error = () => {};
   dom.window.setInterval = () => 1;
@@ -43,7 +44,10 @@ function setup(kiosks = []) {
   panel._kiosks = kiosks;
   panel._selectedKiosk = kiosks[0]?.id || '';
   panel._render();
+  const hass = panel._hass;
+  panel._hass = null;
   dom.window.document.body.append(panel);
+  panel._hass = hass;
 }
 
 async function click(selector) {
@@ -132,7 +136,7 @@ test('settings acknowledgement distinguishes waiting, applied, rejected and time
   assert.match(panel.shadowRoot.textContent, /wachten op bevestiging/);
   item.last_settings_response = { request_id: 'r1', status: 'applied' };
   panel._render(); assert.match(panel.shadowRoot.textContent, /Bevestigd door de tablet/);
-  item.last_settings_response = { request_id: 'r1', status: 'rejected', detail: 'invalid' };
+  item.last_settings_response = { request_id: 'r1', status: 'error', detail: 'invalid' };
   panel._render(); assert.match(panel.shadowRoot.textContent, /Geweigerd: invalid/);
   item.last_settings_response = null; item.last_settings_request_at_ms = Date.now() - 66_000;
   panel._render(); assert.match(panel.shadowRoot.textContent, /time-out na 65 seconden/);
@@ -144,7 +148,7 @@ test('service errors are visible and escaped MQTT identifiers are safe', async (
   panel._hass.callService = async () => { throw new Error('<denied>'); };
   await click('[data-tab="controls"]');
   await click('[data-action="device"][data-value="ON"]');
-  assert.match(panel.shadowRoot.querySelector('[role="alert"]').textContent, /denied/);
+  assert.match(panel.shadowRoot.querySelector('[role="alert"]:not([hidden])').textContent, /denied/);
   assert.equal(panel.shadowRoot.querySelector('[role="alert"] b'), null);
 });
 
@@ -152,5 +156,87 @@ test('list request failures are reported inside the panel', async () => {
   setup([kiosk('alpha')]);
   panel._hass.connection.sendMessagePromise = async () => { throw new Error('offline'); };
   await panel._refresh();
-  assert.match(panel.shadowRoot.querySelector('[role="alert"]').textContent, /Kioskgegevens konden niet worden geladen/);
+  assert.match(panel.shadowRoot.querySelector('[role="alert"]:not([hidden])').textContent, /Kioskgegevens konden niet worden geladen/);
+});
+
+test('polling updates untouched fields without replacing the editor or overwriting dirty values', async () => {
+  setup([kiosk('alpha')]);
+  await click('[data-tab="settings"]');
+  const dirty = panel.shadowRoot.querySelector('[data-key="clock_text_size_sp"]');
+  dirty.value = '99'; dirty.focus();
+  const untouched = panel.shadowRoot.querySelector('[data-key="width_percent"]');
+  list = [kiosk('alpha')];
+  list[0].settings.camera_popup.width_percent = 90;
+  await panel._refresh();
+  assert.equal(panel.shadowRoot.querySelector('[data-key="clock_text_size_sp"]'), dirty);
+  assert.equal(dirty.value, '99');
+  assert.equal(panel.shadowRoot.activeElement, dirty);
+  assert.equal(untouched.value, '90');
+  await click('[data-action="discard"][data-section="screensaver"]');
+  assert.equal(dirty.value, '48', 'discard adopts tablet values without sending MQTT');
+  assert.equal(calls.length, 0);
+});
+
+test('MQTT charging strings false and unknown do not imply charging', () => {
+  setup([kiosk('alpha')]);
+  assert.equal(panel._chargingText('false'), 'Niet aan het opladen');
+  assert.equal(panel._chargingText('true'), 'Opladen');
+  assert.equal(panel._chargingText('unknown'), 'Oplaadstatus onbekend');
+});
+
+test('load errors clear after recovery while retaining the same settings editor', async () => {
+  setup([kiosk('alpha')]);
+  await click('[data-tab="settings"]');
+  const field = panel.shadowRoot.querySelector('[data-key="width_percent"]');
+  const original = panel._hass.connection.sendMessagePromise;
+  panel._hass.connection.sendMessagePromise = async () => { throw new Error('offline'); };
+  await panel._refresh();
+  assert.equal(panel.shadowRoot.querySelector('[data-load-error]').hidden, false);
+  panel._hass.connection.sendMessagePromise = original;
+  await panel._refresh();
+  assert.equal(panel.shadowRoot.querySelector('[data-load-error]').hidden, true);
+  assert.equal(panel.shadowRoot.querySelector('[data-key="width_percent"]'), field);
+});
+
+test('a pending HA service call cannot be submitted twice', async () => {
+  setup([kiosk('alpha')]);
+  await click('[data-tab="controls"]');
+  let complete;
+  panel._hass.callService = () => { calls.push('call'); return new Promise(resolve => { complete = resolve; }); };
+  await click('[data-action="camera"][data-value="show"]');
+  assert.equal(panel.shadowRoot.querySelector('[data-action="camera"]').disabled, true);
+  await click('[data-action="camera"][data-value="show"]');
+  assert.equal(calls.length, 1);
+  complete();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(panel.shadowRoot.querySelector('[data-action="camera"]').disabled, false);
+});
+
+test('polling restarts when the component is reconnected without a new hass assignment', async () => {
+  setup([kiosk('alpha')]);
+  let starts = 0, stops = 0;
+  dom.window.setInterval = () => ++starts;
+  dom.window.clearInterval = () => ++stops;
+  panel.hass = panel._hass;
+  panel.remove();
+  dom.window.document.body.append(panel);
+  assert.equal(starts, 2);
+  assert.equal(stops, 1);
+  await new Promise(resolve => setTimeout(resolve, 0));
+});
+
+test('polling retains navigation focus and scroll positions in a scrolling HA container', async () => {
+  setup([kiosk('alpha')]);
+  const container = dom.window.document.createElement('main');
+  dom.window.document.body.append(container);
+  container.append(panel);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const nav = panel.shadowRoot.querySelector('nav');
+  nav.scrollLeft = 80;
+  container.scrollTop = 240;
+  panel.shadowRoot.querySelector('[data-tab="diagnostics"]').focus();
+  await panel._refresh();
+  assert.equal(container.scrollTop, 240);
+  assert.equal(panel.shadowRoot.querySelector('nav').scrollLeft, 80);
+  assert.equal(panel.shadowRoot.activeElement.dataset.tab, 'diagnostics');
 });
