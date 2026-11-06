@@ -247,6 +247,9 @@ test('device acknowledgements distinguish waiting, applied, rejected and timed o
   item.last_device_response = { request_id: 'd1', status: 'applied' };
   panel._render(); assert.match(panel.shadowRoot.textContent, /Bevestigd door de tablet/);
   item.last_device_response = { request_id: 'd1', status: 'unavailable', detail: 'device_admin_required' };
+  panel._tab = 'controls'; panel._render();
+  assert.match(panel.shadowRoot.querySelector('[role="status"]').textContent, /device_admin_required/);
+  panel._tab = 'diagnostics';
   panel._render(); assert.match(panel.shadowRoot.textContent, /Tijdelijk niet beschikbaar.*device_admin_required/);
   item.last_device_response = null; item.last_device_request_at_ms = Date.now() - 66_000;
   panel._render(); assert.match(panel.shadowRoot.textContent, /time-out na 65 seconden/);

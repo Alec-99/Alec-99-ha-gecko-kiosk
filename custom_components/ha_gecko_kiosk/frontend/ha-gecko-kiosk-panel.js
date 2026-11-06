@@ -266,6 +266,7 @@ class HaGeckoKioskPanel extends HTMLElement {
       await this._hass.callService("ha_gecko_kiosk", service, data);
       this._message = successText;
       this._messageKind = "info";
+      if (service === "device") this._message = "Opdracht verzonden. De tabletrespons verschijnt bij Bediening en Diagnostiek wanneer de client dit ondersteunt.";
       if (["set_screensaver", "set_camera_popup", "reset_settings"].includes(service)) {
         this._message = "Opdracht naar Home Assistant verzonden. De tabletstatus staat hieronder.";
       }
@@ -304,7 +305,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     const tabs = [["overview","Overzicht","mdi:view-dashboard"],["controls","Bediening","mdi:gesture-tap-button"],["settings","Instellingen","mdi:cog-outline"],["diagnostics","Diagnostiek","mdi:heart-pulse"]];
     let content = "";
     if (this._tab === "overview") content = this._overview();
-    if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2>${this._controls(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
+    if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2>${kiosk.last_device_request ? `<p class="notice" role="status">${this._escape(this._deviceCommandStatusText(kiosk))}</p>` : ""}${this._controls(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
     if (this._tab === "settings") content = kiosk ? `<section class="surface"><h2>Instellingen <span class="muted">${this._escape(kiosk.id)}</span></h2><p class="notice" role="status" data-settings-status>${this._escape(this._settingsStatusText(kiosk))}</p><p class="muted">Een verzonden opdracht is pas toegepast nadat de tablet deze heeft bevestigd.</p>${this._settings(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
     if (this._tab === "diagnostics") content = `<section class="surface"><h2>Diagnostiek</h2>${this._diagnostics(kiosk)}</section>`;
     this.shadowRoot.innerHTML = `<style>
