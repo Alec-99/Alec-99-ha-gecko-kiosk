@@ -6,6 +6,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     this._kiosks = [];
     this._timer = null;
     this._loading = false;
+    this._view = { tab: "overview", drafts: new Map(), focus: null };
   }
 
   set hass(value) {
@@ -39,6 +40,7 @@ class HaGeckoKioskPanel extends HTMLElement {
         type: "ha_gecko_kiosk/list",
       });
       this._kiosks = Array.isArray(result.kiosks) ? result.kiosks : [];
+      this._error = "";
       // Do not destroy unsaved inputs during polling. Initial settings retrieval,
       // however, must populate the open panel instead of appearing to do nothing.
       const opened = this.shadowRoot.querySelector("details.settings[open]");
@@ -62,6 +64,8 @@ class HaGeckoKioskPanel extends HTMLElement {
       }
     } catch (error) {
       console.error("Vernieuwen van kioskgegevens mislukt", error);
+      this._error = "Kioskgegevens konden niet worden geladen. Controleer de verbinding en probeer opnieuw.";
+      this._render();
     } finally {
       this._loading = false;
     }
@@ -177,23 +181,35 @@ class HaGeckoKioskPanel extends HTMLElement {
   _render() {
     if (!this.shadowRoot) return;
 
+    const active = this.shadowRoot.activeElement;
+    const focusKey = active?.dataset?.focusKey;
+    const scrollTop = this.shadowRoot.scrollTop;
+    const opened = [...this.shadowRoot.querySelectorAll("details[open]")]
+      .map(el => `${el.className}:${el.dataset.kiosk || ""}`);
+    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
+      const key = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+      this._view.drafts.set(key, input.type === "checkbox" ? input.checked : input.value);
+    }
+
     const cards = this._kiosks.length
       ? this._kiosks.map((kiosk) => {
           const id = this._escape(kiosk.id);
           const availability = this._escape(kiosk.availability || "unknown");
           const status = kiosk.status || {};
           const battery = kiosk.battery || {};
-          const online = String(kiosk.availability).toLowerCase() === "online";
+          const state = String(kiosk.availability || "unknown").toLowerCase();
+          const online = state === "online";
+          const stateClass = online ? "online" : state === "offline" ? "offline" : "unknown";
           return `
             <article class="card">
               <div class="header">
                 <div>
                   <h2>${id}</h2>
-                  <div class="availability ${online ? "online" : "offline"}">
+                  <div class="availability ${stateClass}" role="status" aria-label="Verbinding: ${availability}">
                     ${availability}
                   </div>
                 </div>
-                <div class="battery">${this._escape(battery.level ?? "—")}%</div>
+                <div class="battery" aria-label="Batterij">${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</div>
               </div>
 
               <dl>
@@ -202,6 +218,8 @@ class HaGeckoKioskPanel extends HTMLElement {
                 <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
               </dl>
 
+              <details class="controls">
+              <summary>Bediening</summary>
               <h3>Screensaver</h3>
               <div class="actions">
                 <button data-kiosk="${id}" data-command="screensaver" data-value="ON">Tonen</button>
@@ -213,14 +231,17 @@ class HaGeckoKioskPanel extends HTMLElement {
               </details>
               <h3>Deurbelcamera</h3>
               <div class="actions">
-                <button data-kiosk="${id}" data-value="prewarm">Voorladen</button>
-                <button data-kiosk="${id}" data-value="show">Tonen</button>
-                <button data-kiosk="${id}" data-value="hide">Verbergen</button>
-                <button data-kiosk="${id}" data-value="stop">Stoppen</button>
+                <button data-kiosk="${id}" data-value="prewarm" aria-label="Camera voorladen">Voorladen</button>
+                <button data-kiosk="${id}" data-value="show" aria-label="Camera tonen">Tonen</button>
+                <button data-kiosk="${id}" data-value="hide" aria-label="Camera verbergen">Verbergen</button>
+                <button data-kiosk="${id}" data-value="stop" aria-label="Camera stoppen">Stoppen</button>
               </div>
+              </details>
             </article>`;
         }).join("")
       : `<div class="empty">Nog geen kiosken gevonden. Een kiosk verschijnt na een MQTT-statusbericht.</div>`;
+
+    const availabilityMessage = this._error ? `<div class="error" role="alert">${this._escape(this._error)}</div>` : "";
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -228,15 +249,17 @@ class HaGeckoKioskPanel extends HTMLElement {
           display: block;
           min-height: 100%;
           box-sizing: border-box;
-          padding: 24px;
+          padding: clamp(12px, 3vw, 28px);
           color: var(--primary-text-color);
           background: var(--primary-background-color);
           font-family: var(--paper-font-body1_-_font-family, sans-serif);
         }
-        h1 { margin: 0 0 20px; font-size: 28px; }
+        h1 { margin: 0 0 20px; font-size: 28px; display:flex; align-items:center; gap:12px; }
+        .brand { width:34px; height:34px; object-fit:contain; }
+        .error { margin: 12px 0; padding: 12px; border-inline-start: 4px solid var(--error-color, #b3261e); background: var(--card-background-color); }
         .grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
           gap: 16px;
         }
         .card {
@@ -251,6 +274,7 @@ class HaGeckoKioskPanel extends HTMLElement {
         .availability { margin-top: 4px; font-size: 13px; text-transform: uppercase; }
         .online { color: var(--success-color, #43a047); }
         .offline { color: var(--error-color, #db4437); }
+        .unknown { color: var(--secondary-text-color); }
         .battery { font-size: 24px; font-weight: 500; }
         dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; margin: 18px 0 0; }
         dt { color: var(--secondary-text-color); }
@@ -266,6 +290,8 @@ class HaGeckoKioskPanel extends HTMLElement {
           font: inherit;
         }
         button:active { transform: scale(.97); }
+        button { min-height: 44px; }
+        button:focus-visible, summary:focus-visible, input:focus-visible { outline: 3px solid var(--primary-color); outline-offset: 2px; }
         .empty { color: var(--secondary-text-color); padding: 24px 0; }
         details.settings { margin-top: 18px; padding: 12px 0; border-top: 1px solid var(--divider-color); }
         details.settings summary { cursor: pointer; font-size: 16px; font-weight: 600; margin-bottom: 12px; }
@@ -274,14 +300,29 @@ class HaGeckoKioskPanel extends HTMLElement {
         .setting-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; }
         .setting-row input[type=number] { width: 98px; }
         .setting-row input[type=color] { width: 50px; }
-        .setting-row input { background: var(--input-fill-color, #303030); color: var(--primary-text-color);
+        .setting-row input { background: var(--input-fill-color, var(--card-background-color)); color: var(--primary-text-color);
           border: 1px solid var(--divider-color); border-radius: 6px; padding: 6px; }
         .settings button { background: var(--secondary-background-color, #333); }
         .settings button.save-settings { background: var(--primary-color); }
       </style>
-      <h1>Gecko-kiosken</h1>
+      <h1><img class="brand" src="/ha_gecko_kiosk_static/icon.png" alt="">Gecko-kiosken</h1>
+      ${availabilityMessage}
       <div class="grid">${cards}</div>
     `;
+
+    for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
+      const key = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+      if (this._view.drafts.has(key)) {
+        if (input.type === "checkbox") input.checked = this._view.drafts.get(key);
+        else input.value = this._view.drafts.get(key);
+      }
+      input.dataset.focusKey = `${input.closest("details.settings")?.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
+    }
+    for (const details of this.shadowRoot.querySelectorAll("details")) {
+      if (opened.includes(`${details.className}:${details.dataset.kiosk || ""}`)) details.open = true;
+    }
+    this.shadowRoot.scrollTop = scrollTop;
+    if (focusKey) this.shadowRoot.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({preventScroll:true});
 
     this.shadowRoot.querySelectorAll("button[data-command], button[data-value]").forEach((button) => {
       button.addEventListener("click", async () => {
@@ -293,6 +334,10 @@ class HaGeckoKioskPanel extends HTMLElement {
             await this._camera(button.dataset.kiosk, button.dataset.value);
           }
           window.setTimeout(() => this._refresh(), 250);
+        } catch (error) {
+          console.error("Opdracht naar kiosk mislukt", error);
+          this._error = "De opdracht kon niet worden verzonden. Controleer de integratiestatus en probeer opnieuw.";
+          this._render();
         } finally {
           button.disabled = false;
         }
@@ -305,6 +350,8 @@ class HaGeckoKioskPanel extends HTMLElement {
           await this._hass.callService("ha_gecko_kiosk", "get_settings", {kiosk: button.dataset.kiosk});
         } catch (error) {
           console.error("Kan kioskinstellingen niet ophalen", error);
+          this._error = "Instellingen konden niet worden opgevraagd. Controleer de integratiestatus en probeer opnieuw.";
+          this._render();
         } finally {
           button.disabled = false;
         }
@@ -333,6 +380,8 @@ class HaGeckoKioskPanel extends HTMLElement {
           window.setTimeout(() => this._refresh(), 600);
         } catch (error) {
           console.error("Kan instellingen niet verzenden", error);
+          this._error = "Instellingen konden niet worden verzonden. Je invoer is behouden; probeer opnieuw.";
+          this._render();
         } finally {
           button.disabled = false;
         }
@@ -350,6 +399,8 @@ class HaGeckoKioskPanel extends HTMLElement {
           window.setTimeout(() => this._refresh(), 600);
         } catch (error) {
           console.error("Kan instellingen niet herstellen", error);
+          this._error = "Instellingen konden niet worden hersteld. Controleer de verbinding en probeer opnieuw.";
+          this._render();
         } finally {
           button.disabled = false;
         }
