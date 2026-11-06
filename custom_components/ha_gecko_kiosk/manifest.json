@@ -1,7 +1,7 @@
 {
   "domain": "ha_gecko_kiosk",
   "name": "HA Gecko Kiosk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "documentation": "https://github.com/Alec-99/Alec-99-ha-gecko-kiosk",
   "issue_tracker": "https://github.com/Alec-99/Alec-99-ha-gecko-kiosk/issues",
   "dependencies": [

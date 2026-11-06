@@ -445,7 +445,7 @@ async def _register_panel(hass: HomeAssistant) -> None:
         hass=hass,
         frontend_url_path=PANEL_URL,
         sidebar_title="Gecko-kiosken",
-        sidebar_icon="mdi:tablet-dashboard",
+        sidebar_icon="mdi:tablet",
         webcomponent_name="ha-gecko-kiosk-panel",
         module_url=f"{STATIC_URL}/ha-gecko-kiosk-panel.js",
         embed_iframe=False,
