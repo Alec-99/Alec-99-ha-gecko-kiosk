@@ -326,6 +326,19 @@ class ProtocolTest(unittest.TestCase):
             "tablet_a", {"schema": 1, "request_id": request_id, "status": "applied", "detail": "ok"}))
         self.assertEqual("applied", kiosk._ensure_kiosk(self.hass, "tablet_a")["last_device_response"]["status"])
         self.assertNotIn(request_id, self.hass.data[kiosk.DOMAIN]["pending_device_commands"])
+        # A replayed/conflicting response after completion may not replace the outcome.
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_a", {"schema": 1, "request_id": request_id, "status": "rejected"}))
+        self.assertEqual("applied", kiosk._ensure_kiosk(self.hass, "tablet_a")["last_device_response"]["status"])
+
+        asyncio.run(kiosk._service_device(self.hass, types.SimpleNamespace(data={
+            "kiosk": "tablet_a", "command": "brightness", "value": "63",
+        })))
+        late_id = self.hass.publishes[-1][1]["request_id"]
+        self.hass.data[kiosk.DOMAIN]["pending_device_commands"][late_id]["expires"] = time.monotonic() - 1
+        kiosk._handle_device_response(self.hass, response(
+            "tablet_a", {"schema": 1, "request_id": late_id, "status": "applied"}))
+        self.assertEqual(request_id, kiosk._ensure_kiosk(self.hass, "tablet_a")["last_device_response"]["request_id"])
 
     def test_invalid_or_unsupported_capability_manifest_fails_closed(self):
         for payload in (
