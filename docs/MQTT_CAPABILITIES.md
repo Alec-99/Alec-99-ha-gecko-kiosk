@@ -83,3 +83,56 @@ Clients that advertise `command.acknowledged` accept non-retained QoS 1 JSON on 
 The app rejects expired or unsupported requests and publishes a non-retained QoS 1 response on `ha_kiosk/<device_id>/device/response` with the same request ID and one of `applied`, `rejected`, `unsupported`, `unavailable`, `expired` or `error`. The integration accepts a response only for an outstanding request sent to the same device; unmatched and late responses are ignored. Its panel reports a 65-second timeout. Clients without this capability continue to receive the original individual command topic and payload, so rollout does not break existing Gecko clients.
 
 The updated Gecko development client also checks expiry immediately before device execution. It suppresses duplicate pending requests and replays completed outcomes for identical requests. Reusing an ID with different arguments is rejected. Its process-local ledger holds at most 128 requests and retains each until two minutes after expiry; a full ledger rejects new requests instead of evicting live duplicate protection. This protection is not persisted across an Android process restart. Older clients advertising the acknowledgement capability may lack this added duplicate protection; it is not a new protocol version or a durable exactly-once guarantee.
+
+## Version compatibility and recovery
+
+App versions, integration versions and the MQTT protocol are independent.
+Integration `0.2.2` understands schema 1 / protocol 1. The Gecko
+`0.8.2-gecko-experiment` development line implements this protocol, but a
+version label alone does not prove which optional features a build includes.
+Use the retained manifest from the running client.
+
+| Client advertisement | Integration 0.2.2 behavior |
+| --- | --- |
+| No manifest (legacy client) | Existing raw command topics and payloads |
+| Compatible v1 manifest without `command.acknowledged` | Only advertised controls; existing raw commands |
+| Compatible v1 manifest with `command.acknowledged` | Advertised device controls use expiring requests and correlated outcomes |
+| Compatible subset profile | Only its advertised capabilities; no Android-only requirement |
+| Malformed manifest or unsupported major | Mapped controls disabled until compatible metadata arrives |
+
+An acknowledged MQTT publish is not proof of device execution. Wait for the
+device response or the panel's timeout. Duplicate protection is process-local;
+do not blindly resend an uncertain command after an app restart.
+
+### Upgrade
+
+1. Back up the installed integration version and the app's private configuration.
+   Keep credentials and backups outside this public repository.
+2. Upgrade the HA integration, restart Home Assistant and reload the browser.
+   Confirm existing legacy controls before changing the client.
+3. Install only an approved APK signed with the expected key. A successful
+   build or downloadable CI artifact does not establish physical-device behavior.
+4. Confirm availability, the live capability manifest and a low-impact command
+   with its state/result. Validate camera, settings and display permissions
+   separately before replacing an existing installation.
+
+### Rollback
+
+Restore the previous integration source through the same installation method,
+restart Home Assistant and reload the browser. Restoring an Android APK also
+depends on its signing key and version code: Android may refuse a lower version
+code. Do not uninstall the app to force a downgrade without a verified private
+backup; uninstalling can remove settings.
+
+When reverting to a client that never publishes a manifest, first stop the newer
+client and remove **only** its retained `ha_kiosk/<device_id>/status/capabilities`
+record using the broker's retained-message management. Then restart Home
+Assistant to clear the integration's in-memory capability model before starting
+the legacy client. An empty payload delivered to the running integration is
+currently treated as an invalid manifest; it does not immediately enable legacy
+mode. Leaving a newer retained manifest behind can incorrectly select the
+acknowledged route for an older client.
+
+Do not remove legacy topics during this rollout. Live HA/HACS installation,
+physical tablet behavior and an actual ESP32 client still require separate
+validation; a synthetic subset profile is not firmware validation.
