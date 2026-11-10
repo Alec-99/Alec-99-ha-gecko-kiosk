@@ -59,6 +59,7 @@ SPECS = {
         KioskSpec("brightness", "Schermhelderheid", "display", "brightness_percent", "display.brightness", minimum=1, maximum=100, unit="%", command="brightness", suffix="display/brightness_percent"),
         KioskSpec("volume", "Mediavolume", "audio", "volume_percent", "audio.volume", minimum=0, maximum=100, unit="%", command="volume", suffix="audio/volume_percent"),
     ),
+    "update": (KioskSpec("app_update", "App-update", "ota", "version_code", "ota.install"),),
     "button": (
         KioskSpec("reload", "Dashboard vernieuwen", "", "", "dashboard.reload", command="reload_dashboard"),
     ),

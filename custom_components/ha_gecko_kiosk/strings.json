@@ -9,5 +9,22 @@
     "abort": {
       "already_configured": "HA Gecko Kiosk has already been configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Private APK update source",
+        "description": "Use a private repository and trusted build branch. Token: Actions read access. Leave token blank to preserve it; clear repository to disable OTA. Credentials stay in HA. One manual installation of an OTA-capable app is required first.",
+        "data": {
+          "ota_repository": "GitHub repository (owner/repository)",
+          "ota_branch": "Trusted build branch",
+          "ota_workflow": "Build workflow filename",
+          "ota_token": "GitHub access token"
+        }
+      }
+    },
+    "error": {
+      "invalid_ota_source": "Enter a repository, branch, workflow filename and Actions-read token, or clear the repository to disable OTA."
+    }
   }
 }

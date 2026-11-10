@@ -4,7 +4,7 @@
 
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
-**Integration version:** `0.3.0` · **Domain:** `ha_gecko_kiosk`.
+**Integration version:** `0.4.0` · **Domain:** `ha_gecko_kiosk`.
 
 ## Installeren in Home Assistant (HACS / Marketplace)
 
@@ -26,6 +26,7 @@ Handmatig installeren: kopieer de map `custom_components/ha_gecko_kiosk` naar `/
 - Bevestigingsvensters, berichten en cameravensters met antwoordevents
 - Schermbeveiligingsmeldingen en UI-instellingen
 - Tabletbediening waaronder helderheid, volume en dashboard herladen
+- APK-OTA via een HA-update-entiteit, met privé CI-bron, tijdelijke downloadrechten en Android-installatiecontrole
 
 Beschikbare HA-acties: `ha_gecko_kiosk.camera`, `ha_gecko_kiosk.device`, `ha_gecko_kiosk.popup`, `ha_gecko_kiosk.notification`, `ha_gecko_kiosk.set_screensaver`, `ha_gecko_kiosk.set_camera_popup`, `ha_gecko_kiosk.get_settings`, `ha_gecko_kiosk.reset_settings`.
 
@@ -42,6 +43,16 @@ Vanaf 0.3.0 verschijnen kiosken bij **Instellingen → Apparaten en diensten →
 Bestaande MQTT-discovery-entiteiten behouden hun ID en geschiedenis; de integratie voegt daarvoor geen tweede native equivalent toe. HA-versies met één apparaat per config-entry tonen het MQTT-apparaat en het integratieapparaat als gekoppelde apparaten via dezelfde bewezen identiteit. Op oudere HA-versies wordt het fysieke apparaat gedeeld. Naam, model en fabrikant worden alleen uit de kioskdiscovery overgenomen. YAML-installaties krijgen automatisch dezelfde config-entry.
 
 Na bijwerken **HA herstarten**. MQTT moet aangesloten zijn en de kiosk moet opnieuw verbinden om zijn discovery en status te melden. Geen apparaten zichtbaar: controleer eerst of `ha_kiosk/<id>/availability` en de overige statusberichten dezelfde broker bereiken.
+
+## APK-updates vanuit HA
+
+Installeer eerst één keer handmatig een OTA-geschikte app (Gecko 0.8.6 of nieuwer) met dezelfde signing key. Oudere apps kunnen zichzelf nog niet via MQTT bijwerken.
+
+Open de **opties van HA Gecko Kiosk** bij Apparaten en diensten. Stel je private GitHub-repository, vertrouwde buildbranch, workflowbestandsnaam en een token met **Actions: Read** in. Het token blijft in HA; een leeg tokenveld behoudt het bestaande token. Maak de repository leeg om de bron uit te schakelen. Kies daarna de **App-update**-entiteit van de kiosk.
+
+HA selecteert alleen niet-verlopen tablet-APK-artifacts van geslaagde `push`/`workflow_dispatch`-runs uit die repository en branch. De build moet `ota-manifest.json` naast de APK leveren. De kiosk controleert SHA-256, pakketnaam, een hoger Android-versienummer en dezelfde ondertekening. Android kan toestemming voor installeren vanuit deze app en lokale installatiebevestiging vragen. Er is geen automatische publicatie of stille-installatiebelofte.
+
+Zie [OTA-protocol, configuratie en beperkingen](docs/OTA.md).
 
 ## Scope en teststatus
 

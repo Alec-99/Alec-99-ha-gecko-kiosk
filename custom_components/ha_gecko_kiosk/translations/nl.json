@@ -9,5 +9,22 @@
     "abort": {
       "already_configured": "HA Gecko Kiosk is al ingesteld."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Privébron voor APK-updates",
+        "description": "Gebruik een privérepository en een vertrouwde buildbranch. Het token heeft Actions-leestoegang nodig en blijft in HA. Laat het token leeg om het bestaande token te behouden. Maak de repository leeg om OTA uit te schakelen. Installeer eerst één keer handmatig een app met OTA-ondersteuning.",
+        "data": {
+          "ota_repository": "GitHub-repository (eigenaar/repository)",
+          "ota_branch": "Vertrouwde buildbranch",
+          "ota_workflow": "Bestandsnaam van de buildworkflow",
+          "ota_token": "GitHub-toegangstoken"
+        }
+      }
+    },
+    "error": {
+      "invalid_ota_source": "Vul een repository, branch, workflowbestandsnaam en token met Actions-leestoegang in, of maak de repository leeg om OTA uit te schakelen."
+    }
   }
 }

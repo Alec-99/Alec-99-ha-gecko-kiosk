@@ -888,7 +888,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-PLATFORMS = ("binary_sensor", "sensor", "switch", "number", "button")
+PLATFORMS = ("binary_sensor", "sensor", "switch", "number", "button", "update")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -901,6 +901,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for kiosk_id in list(_state(hass)):
         manager.metadata_updated(kiosk_id)
         manager.update(kiosk_id)
+    from .ota import OtaManager, OtaDownloadView
+    data = hass.data[DOMAIN]
+    data["ota_manager"] = OtaManager(hass, entry)
+    if not data.get("_ota_view_registered"):
+        hass.http.register_view(OtaDownloadView())
+        data["_ota_view_registered"] = True
+
+    @callback
+    def receive_ota(message):
+        parts = message.topic.split("/")
+        if (len(parts) == 4 and parts[0] == TOPIC_PREFIX and parts[2:] == ["ota", "state"]
+                and _valid_segment(parts[1]) and len(parts[1]) <= 64):
+            data["ota_manager"].receive(parts[1], message.payload)
+
+    data[DATA_UNSUBS].append(await mqtt.async_subscribe(hass, f"{TOPIC_PREFIX}/+/ota/state", receive_ota, qos=1))
+    entry.async_on_unload(entry.add_update_listener(_reload_options))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -911,6 +927,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS): return False
     data = hass.data[DOMAIN]
+    ota = data.pop("ota_manager", None)
+    if ota is not None: ota.stop()
     manager = data.pop("registry_manager", None)
     if manager is not None: manager.stop()
     for unsub in list(data.get(DATA_UNSUBS, [])): unsub()
@@ -924,3 +942,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     SERVICE_SET_SCREENSAVER, SERVICE_SET_CAMERA_POPUP, SERVICE_GET_SETTINGS, SERVICE_RESET_SETTINGS):
         hass.services.async_remove(DOMAIN, service)
     return True
+
+
+async def _reload_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
