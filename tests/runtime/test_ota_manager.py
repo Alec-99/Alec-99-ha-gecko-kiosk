@@ -286,5 +286,6 @@ class OtaManagerTest(unittest.IsolatedAsyncioTestCase):
             return {"artifacts": [artifact]}
 
         real.github_json = github
-        await real.check()
+        with patch("custom_components.ha_gecko_kiosk.ota.time.monotonic", return_value=5.0):
+            await real.check()
         self.assertEqual(Candidate(7, "1.1", "a" * 40), real.candidate)

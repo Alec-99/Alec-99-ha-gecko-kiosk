@@ -130,7 +130,7 @@ class OtaManager:
             self.candidate = None
             return
         async with self.lock:
-            if not force and time.monotonic() - self.last_check < 600:
+            if not force and self.last_check and time.monotonic() - self.last_check < 600:
                 return
             repository = self.entry.options["ota_repository"]
             workflow = quote(

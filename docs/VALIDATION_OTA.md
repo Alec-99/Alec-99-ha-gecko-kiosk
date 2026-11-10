@@ -1,6 +1,6 @@
 # HA OTA validation — 10 November 2026
 
-Integration 0.4.1 was checked with Home Assistant 2026.11.1 / frontend 20261028.5.
+Integration 0.4.2 was checked with Home Assistant 2026.11.1 / frontend 20261028.5.
 All runtime data used fictional devices on isolated loopback services.
 
 - 21 fast protocol/archive tests cover existing controls, capability parsing,
