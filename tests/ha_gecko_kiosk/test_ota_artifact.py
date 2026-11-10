@@ -63,6 +63,7 @@ class OtaArtifactTest(unittest.TestCase):
 
     def test_manifest_is_bound_to_build_version_commit_and_package(self):
         for field, value in [
+            ("schema", True),
             ("version_name", "other"),
             ("source_commit", "b" * 40),
             ("package_id", "other.app"),

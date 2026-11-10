@@ -54,6 +54,7 @@ class OtaDownloadView(HomeAssistantView):
         if (
             job is None
             or job["expires"] < time.monotonic()
+            or not supplied.isascii()
             or not hmac.compare_digest(supplied, "Bearer " + job["token"])
         ):
             raise web.HTTPUnauthorized()

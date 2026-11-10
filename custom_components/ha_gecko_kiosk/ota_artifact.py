@@ -23,7 +23,11 @@ class Candidate:
 
 def validate_manifest(value, expected_version, expected_commit):
     """Validate a tiny CI-generated manifest before extracting any APK."""
-    if not isinstance(value, dict) or value.get("schema") != 1:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema")) is not int
+        or value["schema"] != 1
+    ):
         raise ValueError("Invalid OTA manifest")
     if (
         value.get("package_id") != PACKAGE

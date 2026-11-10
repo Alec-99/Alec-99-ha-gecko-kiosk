@@ -1,6 +1,9 @@
 """OTA orchestration contracts against the real HA APIs (no running HA needed)."""
 
 import asyncio
+import hashlib
+import io
+import zipfile
 import json
 from pathlib import Path
 import tempfile
@@ -83,6 +86,9 @@ class OtaManagerTest(unittest.IsolatedAsyncioTestCase):
         request.headers = {"Authorization": "Bearer wrong"}
         with self.assertRaises(web.HTTPUnauthorized):
             await OtaDownloadView().get(request, body["download_path"].split("/")[-1])
+        request.headers = {"Authorization": "Bearer non-ascii-\u00e9"}
+        with self.assertRaises(web.HTTPUnauthorized):
+            await OtaDownloadView().get(request, body["download_path"].split("/")[-1])
         request.headers = {"Authorization": "Bearer " + body["download_token"]}
         next(iter(self.manager.jobs.values()))["expires"] = 0
         with self.assertRaises(web.HTTPUnauthorized):
@@ -122,6 +128,80 @@ class OtaManagerTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual("no-store", response.headers["Cache-Control"])
         finally:
             await runner.cleanup()
+
+    async def test_private_source_authentication_is_not_forwarded_to_storage_redirect(
+        self,
+    ):
+        candidate = Candidate(7, "1.1", "a" * 40)
+        manifest = {
+            "schema": 1,
+            "package_id": "com.alec.hageckokiosk",
+            "version_name": "1.1",
+            "version_code": 11,
+            "source_commit": "a" * 40,
+            "apk_filename": "fixture.apk",
+            "size": self.apk.stat().st_size,
+            "sha256": hashlib.sha256(self.apk.read_bytes()).hexdigest(),
+        }
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as bundle:
+            bundle.writestr("ota-manifest.json", json.dumps(manifest))
+            bundle.writestr("fixture.apk", self.apk.read_bytes())
+        body = output.getvalue()
+
+        class Response:
+            def __init__(self, status, headers, payload=b""):
+                self.status, self.headers, self.payload = status, headers, payload
+                self.content_length = len(payload)
+                self.content = self
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def iter_chunked(self, size):
+                for start in range(0, len(self.payload), size):
+                    yield self.payload[start : start + size]
+
+        calls = []
+        responses = [
+            Response(
+                302, {"Location": "https://fixture.blob.core.windows.net/artifact"}
+            ),
+            Response(200, {}, body),
+        ]
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return responses.pop(0)
+
+        real = OtaManager(self.hass, SimpleNamespace(options=self.options))
+        with patch(
+            "custom_components.ha_gecko_kiosk.ota.async_get_clientsession",
+            return_value=SimpleNamespace(get=get),
+        ):
+            received, path = await real.prepare(candidate)
+        self.assertEqual(manifest, received)
+        self.assertEqual(self.apk.read_bytes(), path.read_bytes())
+        self.assertEqual(
+            "Bearer synthetic-github-token", calls[0][1]["headers"]["Authorization"]
+        )
+        self.assertNotIn("headers", calls[1][1])
+        self.assertFalse(calls[0][1]["allow_redirects"])
+        self.assertFalse(calls[1][1]["allow_redirects"])
+        responses[:] = [
+            Response(302, {"Location": "https://example.invalid/untrusted"})
+        ]
+        rejected = OtaManager(self.hass, SimpleNamespace(options=self.options))
+        with patch(
+            "custom_components.ha_gecko_kiosk.ota.async_get_clientsession",
+            return_value=SimpleNamespace(get=get),
+        ):
+            with self.assertRaises(HomeAssistantError):
+                await rejected.prepare(candidate)
+        self.assertEqual(3, len(calls), "Untrusted storage origin was contacted")
 
     async def test_lost_request_times_out_and_revokes_artifact_grant(self):
         with patch(
