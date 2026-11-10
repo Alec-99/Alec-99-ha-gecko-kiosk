@@ -43,3 +43,8 @@ The Android installer itself was exercised in the preceding private 0.8.6 CI:
 32 regression/verification tests and a separate UI-confirmed real emulator upgrade
 with restart and `installed` state. That unchanged client protocol is reused here.
 No physical tablet was available, and no new APK or environment was published.
+
+[Public CI run 42922500135](https://github.com/Alec-99/Alec-99-ha-gecko-kiosk/actions/runs/42922500135)
+on `51a11532fd29f1c3be83f198e09896c433800b4a` passed both validation jobs:
+27 protocol/archive/APK tests, 14 real-HA runtime contracts, 23 frontend tests,
+Python/JavaScript/JSON validation and the public snapshot pattern check.
