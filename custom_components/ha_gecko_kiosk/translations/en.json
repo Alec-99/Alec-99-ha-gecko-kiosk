@@ -13,8 +13,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "Private APK update source",
-        "description": "Use a private repository and trusted build branch. Token: Actions read access. Leave token blank to preserve it; clear repository to disable OTA. Credentials stay in HA. One manual installation of an OTA-capable app is required first.",
+        "title": "Optional private APK update source",
+        "description": "Upload APK files without extra settings in Gecko-kiosken → App-updates. These fields configure an optional GitHub build source. The Actions-read token stays in HA. Leave it blank to preserve the existing token; clear the repository to disable this source.",
         "data": {
           "ota_repository": "GitHub repository (owner/repository)",
           "ota_branch": "Trusted build branch",

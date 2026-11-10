@@ -13,6 +13,10 @@ class HaGeckoKioskPanel extends HTMLElement {
     this._drafts = new Map();
     this._message = "";
     this._messageKind = "info";
+    this._otaUpload = null;
+    this._apkFile = null;
+    this._uploading = false;
+    this._uploadController = null;
   }
 
   set hass(value) {
@@ -32,6 +36,7 @@ class HaGeckoKioskPanel extends HTMLElement {
   disconnectedCallback() {
     if (this._timer) window.clearInterval(this._timer);
     this._timer = null;
+    this._uploadController?.abort();
   }
 
   async _refresh() {
@@ -42,17 +47,21 @@ class HaGeckoKioskPanel extends HTMLElement {
       this._captureState();
       const previousSelection = this._selectedKiosk;
       this._kiosks = Array.isArray(result.kiosks) ? result.kiosks : [];
+      if (!this._uploading) this._otaUpload = result.ota_upload || null;
       this._loadError = "";
       if (!this._kiosks.some(kiosk => kiosk.id === this._selectedKiosk)) {
         this._selectedKiosk = this._kiosks[0]?.id || "";
       }
       if (this._tab === "settings" && previousSelection === this._selectedKiosk &&
           this.shadowRoot.querySelector("[data-key]")) this._updateSettings();
+      else if (this._tab === "updates" && previousSelection === this._selectedKiosk &&
+          this.shadowRoot.querySelector("[data-apk-file]")) this._updateOta();
       else this._render();
     } catch (error) {
       console.error("Vernieuwen van kioskgegevens mislukt", error);
       this._loadError = "Kioskgegevens konden niet worden geladen. Controleer de verbinding en probeer opnieuw.";
       if (this._tab === "settings" && this.shadowRoot.querySelector("[data-key]")) this._updateSettings();
+      else if (this._tab === "updates" && this.shadowRoot.querySelector("[data-apk-file]")) this._updateOta();
       else this._render();
     } finally {
       this._loading = false;
@@ -302,29 +311,179 @@ class HaGeckoKioskPanel extends HTMLElement {
     this.shadowRoot.querySelector("[data-load-error]").hidden = !this._loadError;
   }
 
+  _otaStatusText(kiosk) {
+    const state = kiosk?.ota || {};
+    const labels = {
+      requested: "Update aangevraagd; wachten op de kiosk.", downloading: "APK downloaden op de kiosk",
+      verifying: "De kiosk controleert de APK.", permission_required: "Sta op de tablet installatie door HA Gecko Kiosk toe en keer terug naar de app.",
+      awaiting_confirmation: "Bevestig de installatie op de tablet.", installing: "Android installeert de APK.",
+      installed: "Installatie voltooid.", cancelled: "Installatie geannuleerd.",
+      error: "Update mislukt. Controleer de kiosk en probeer opnieuw.", idle: "Gereed voor een update.",
+    };
+    const text = labels[state.status] || "Nog geen updatestatus ontvangen.";
+    return state.status === "downloading" && Number.isInteger(state.progress)
+      ? `${text}: ${Math.max(0, Math.min(100, state.progress))}%` : text;
+  }
+
+  _otaBlockedReason(kiosk) {
+    if (!kiosk) return "Selecteer eerst een kiosk.";
+    if (kiosk.capabilities?.compatible !== true || !kiosk.capabilities?.capabilities?.includes("ota.install"))
+      return "Deze kiosk ondersteunt nog geen OTA. Installeer eerst één keer handmatig app 0.8.6 of nieuwer.";
+    if (kiosk.availability !== "online") return "De kiosk is offline.";
+    if (["requested", "downloading", "verifying", "permission_required", "awaiting_confirmation", "installing"].includes(kiosk.ota?.status))
+      return "Er loopt al een update voor deze kiosk.";
+    if (!this._otaUpload) return "Upload eerst een APK.";
+    if (!Number.isInteger(kiosk.ota?.version_code)) return "Wachten op het buildnummer van de kiosk.";
+    if (this._otaUpload.version_code <= kiosk.ota.version_code)
+      return "De APK moet een hoger buildnummer hebben dan de geïnstalleerde app.";
+    return "";
+  }
+
+  _updates() {
+    return `<section class="surface"><h2>App-updates</h2>
+      <p>Kies een APK vanaf je computer. Upload het bestand naar Home Assistant en installeer het daarna op de gewenste kiosk.</p>
+      <div class="control-group ota-group"><label class="field ota-field"><span>APK-bestand</span><input type="file" accept=".apk,application/vnd.android.package-archive" data-apk-file aria-label="APK-bestand kiezen"></label>
+      <p class="muted" data-apk-filename></p><button data-action="ota-upload">APK uploaden</button>
+      <p role="status" data-upload-status></p><progress data-upload-progress aria-label="APK uploaden en controleren" hidden></progress></div>
+      <div class="control-group ota-group"><h3>Beschikbare update</h3><p data-ota-upload></p>
+      <label class="field ota-field"><span>Kiosk</span><select data-ota-kiosk aria-label="Kiosk voor app-update">${this._kiosks.map(kiosk => `<option value="${this._escape(kiosk.id)}" ${kiosk.id === this._selectedKiosk ? "selected" : ""}>${this._escape(kiosk.id)}</option>`).join("")}</select></label>
+      <p class="muted" data-ota-current></p><button data-action="ota-install"></button><p class="muted" data-ota-blocked></p>
+      <p class="notice" role="status" data-ota-status></p>
+      <p class="muted">Android controleert het pakket en de ondertekening. De tablet kan om installatiebevestiging vragen.</p></div></section>`;
+  }
+
+  _updateOta() {
+    const root = this.shadowRoot;
+    if (!root.querySelector("[data-apk-file]")) return;
+    const kiosk = this._selected(), metadata = this._otaUpload;
+    root.querySelector("[data-apk-filename]").textContent = this._apkFile ? this._apkFile.name : "Maximaal 256 MiB. Alleen een APK-bestand is nodig.";
+    root.querySelector("[data-ota-upload]").textContent = metadata
+      ? `Versie ${metadata.version_name} · build ${metadata.version_code} · ${(metadata.size / (1024 * 1024)).toFixed(1)} MiB`
+      : "Nog geen APK geüpload.";
+    root.querySelector("[data-upload-status]").textContent = this._uploading ? "APK uploaden en controleren…" : "";
+    root.querySelector("[data-upload-progress]").hidden = !this._uploading;
+    root.querySelector("[data-apk-file]").disabled = this._busy;
+    const picker = root.querySelector("[data-ota-kiosk]");
+    const ids = this._kiosks.map(item => item.id);
+    if (JSON.stringify([...picker.options].map(option => option.value)) !== JSON.stringify(ids)) {
+      picker.innerHTML = this._kiosks.map(item => `<option value="${this._escape(item.id)}">${this._escape(item.id)}</option>`).join("");
+    }
+    picker.value = this._selectedKiosk;
+    picker.disabled = this._busy || !this._kiosks.length;
+    root.querySelector("[data-ota-current]").textContent = kiosk
+      ? `Geïnstalleerd: ${kiosk.ota?.version_name || kiosk.diagnostics?.app_version || "onbekend"}${Number.isInteger(kiosk.ota?.version_code) ? ` · build ${kiosk.ota.version_code}` : ""}` : "";
+    const reason = this._otaBlockedReason(kiosk);
+    root.querySelector("[data-ota-blocked]").textContent = reason;
+    root.querySelector("[data-ota-status]").textContent = this._otaStatusText(kiosk);
+    root.querySelector('[data-action="ota-upload"]').disabled = this._busy || !this._apkFile;
+    const install = root.querySelector('[data-action="ota-install"]');
+    install.textContent = kiosk ? `Installeren op ${kiosk.id}` : "Installeren op kiosk";
+    install.disabled = this._busy || Boolean(reason);
+    root.querySelector("[data-load-error]").textContent = this._loadError;
+    root.querySelector("[data-load-error]").hidden = !this._loadError;
+  }
+
+  async _uploadApk() {
+    if (this._busy || !this._apkFile) return;
+    this._busy = true;
+    this._uploading = true;
+    this._uploadController = new AbortController();
+    this._message = "";
+    this._render();
+    try {
+      const response = await this._hass.fetchWithAuth("/api/ha_gecko_kiosk/ota_upload", {
+        method: "POST", headers: { "Content-Type": "application/vnd.android.package-archive" },
+        body: this._apkFile, signal: this._uploadController.signal,
+      });
+      let result;
+      try { result = await response.json(); } catch (_) { result = {}; }
+      if (!response.ok) throw new Error(result.message || "De upload is geweigerd. Controleer de bestandsgrootte en probeer opnieuw.");
+      this._otaUpload = result;
+      this._apkFile = null;
+      this._message = `APK opgeslagen: versie ${result.version_name} (build ${result.version_code}). Kies een kiosk en druk op Installeren.`;
+      this._messageKind = "info";
+    } catch (error) {
+      this._message = error.name === "AbortError" ? "Upload afgebroken." : `Upload mislukt: ${error.message || "Controleer de HA-verbinding."}`;
+      this._messageKind = "error";
+    } finally {
+      this._busy = false;
+      this._uploading = false;
+      this._uploadController = null;
+      this._render();
+    }
+  }
+
+  async _installApk() {
+    const kiosk = this._selected();
+    if (this._busy || this._otaBlockedReason(kiosk)) return;
+    this._busy = true;
+    this._render();
+    try {
+      const response = await this._hass.fetchWithAuth("/api/ha_gecko_kiosk/ota_install", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kiosk: kiosk.id, upload_id: this._otaUpload.upload_id }),
+      });
+      let result;
+      try { result = await response.json(); } catch (_) { result = {}; }
+      if (!response.ok) throw new Error(result.message || "Home Assistant heeft de update geweigerd.");
+      this._message = `Update aangevraagd voor ${kiosk.id}. De voortgang verschijnt hieronder.`;
+      this._messageKind = "info";
+      kiosk.ota = { ...kiosk.ota, status: "requested", progress: 0 };
+    } catch (error) {
+      this._message = `Installatie niet gestart: ${error.message || "Controleer de HA-verbinding."}`;
+      this._messageKind = "error";
+    } finally {
+      this._busy = false;
+      this._render();
+      await this._refresh();
+    }
+  }
+
   _render() {
     if (!this.shadowRoot) return;
     const state = this._captureState();
     const kiosk = this._selected();
-    const tabs = [["overview","Overzicht","mdi:view-dashboard"],["controls","Bediening","mdi:gesture-tap-button"],["settings","Instellingen","mdi:cog-outline"],["diagnostics","Diagnostiek","mdi:heart-pulse"]];
+    const tabs = [["overview","Overzicht","mdi:view-dashboard"],["controls","Bediening","mdi:gesture-tap-button"],["settings","Instellingen","mdi:cog-outline"],["updates","App-updates","mdi:cellphone-arrow-down"],["diagnostics","Diagnostiek","mdi:heart-pulse"]];
     let content = "";
     if (this._tab === "overview") content = this._overview();
     if (this._tab === "controls") content = kiosk ? `<section class="surface"><h2>Bediening <span class="muted">${this._escape(kiosk.id)}</span></h2>${kiosk.last_device_request ? `<p class="notice" role="status">${this._escape(this._deviceCommandStatusText(kiosk))}</p>` : ""}${this._controls(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
     if (this._tab === "settings") content = kiosk ? `<section class="surface"><h2>Instellingen <span class="muted">${this._escape(kiosk.id)}</span></h2><p class="notice" role="status" data-settings-status>${this._escape(this._settingsStatusText(kiosk))}</p><p class="muted">Een verzonden opdracht is pas toegepast nadat de tablet deze heeft bevestigd.</p>${this._settings(kiosk)}</section>` : `<p class="muted">Selecteer eerst een kiosk in Overzicht.</p>`;
+    if (this._tab === "updates") content = this._updates();
     if (this._tab === "diagnostics") content = `<section class="surface"><h2>Diagnostiek</h2>${this._diagnostics(kiosk)}</section>`;
     this.shadowRoot.innerHTML = `<style>
       :host{display:block;box-sizing:border-box;min-height:100%;padding:clamp(12px,3vw,28px);color-scheme:dark;--primary-text-color:#f7f8fa;--secondary-text-color:#b8c0cb;--primary-background-color:#171b21;--secondary-background-color:#2b2f36;--card-background-color:#2b2f36;--primary-color:#ff8a00;--text-primary-color:#11151d;--divider-color:#4b5563;--success-color:#71c785;--error-color:#ff7a70;color:var(--primary-text-color);background:var(--primary-background-color);font-family:var(--paper-font-body1_-_font-family,Roboto,sans-serif)}
       *{box-sizing:border-box}header{display:flex;align-items:center;gap:14px;margin:0 0 20px}.brand{width:40px;height:40px;object-fit:contain}h1{font-size:clamp(22px,4vw,30px);margin:0}h2{font-size:20px;margin:0 0 16px}h3{font-size:16px;margin:0 0 12px}h4{margin:16px 0 8px}.muted{color:var(--secondary-text-color);font-weight:400;font-size:.9em}
       nav{display:flex;gap:8px;overflow-x:auto;border-bottom:1px solid var(--divider-color);margin-bottom:20px}nav button{white-space:nowrap;border-radius:10px 10px 0 0;background:transparent;color:var(--secondary-text-color);border-bottom:3px solid transparent}nav button[aria-current=page]{color:var(--primary-text-color);border-bottom-color:var(--primary-color)}
-      button{font:inherit;min-height:44px;padding:9px 14px;border:0;border-radius:10px;background:var(--primary-color);color:var(--text-primary-color,white);cursor:pointer}button.secondary{background:var(--secondary-background-color);color:var(--primary-text-color)}button:hover{filter:brightness(1.08)}button:focus-visible,input:focus-visible{outline:3px solid var(--primary-color);outline-offset:2px}
+      button{font:inherit;min-height:44px;padding:9px 14px;border:0;border-radius:10px;background:var(--primary-color);color:var(--text-primary-color,white);cursor:pointer}button.secondary{background:var(--secondary-background-color);color:var(--primary-text-color)}button:hover{filter:brightness(1.08)}button:disabled{opacity:.55;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--primary-color);outline-offset:2px}
       .overview-grid,.control-grid,.settings-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:14px}.kiosk-card,.surface,.setting-group,.empty{display:block;text-align:left;background:var(--card-background-color);color:var(--primary-text-color);border:1px solid var(--divider-color);border-radius:var(--ha-card-border-radius,14px);box-shadow:var(--ha-card-box-shadow,0 2px 6px rgba(0,0,0,.12));padding:18px}.kiosk-card{width:100%}.kiosk-card.selected{border-color:var(--primary-color);box-shadow:0 0 0 1px var(--primary-color)}.card-top,.metrics{display:flex;align-items:center;justify-content:space-between;gap:12px}.metrics{justify-content:flex-start;margin:18px 0 12px}.metrics span{display:inline-flex;align-items:center;gap:6px}.pill{border-radius:99px;padding:5px 10px;font-size:12px;text-transform:capitalize}.pill.online{color:var(--success-color,#2e7d32);background:color-mix(in srgb,var(--success-color,#2e7d32) 14%,transparent)}.pill.offline{color:var(--error-color,#b3261e);background:color-mix(in srgb,var(--error-color,#b3261e) 14%,transparent)}.pill.unknown{color:var(--secondary-text-color);background:var(--secondary-background-color)}
-      .control-group,.setting-group{display:flex;flex-direction:column;align-items:flex-start;gap:10px}.field{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;min-height:42px;width:100%}.field input[type=number]{width:112px}.field input[type=color]{width:54px;height:38px}.field input{font:inherit;color:var(--primary-text-color);background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:8px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.diagnostics{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,2fr);gap:10px 16px}.diagnostics dt{color:var(--secondary-text-color)}.diagnostics dd{margin:0;overflow-wrap:anywhere}.notice{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:var(--secondary-background-color);border-inline-start:4px solid var(--primary-color)}.notice.error{border-color:var(--error-color,#b3261e)}ha-icon{--mdc-icon-size:20px;vertical-align:middle;margin-inline-end:5px}
+      .control-group,.setting-group{display:flex;flex-direction:column;align-items:flex-start;gap:10px}.field{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;min-height:42px;width:100%}.field input[type=number]{width:112px}.field input[type=color]{width:54px;height:38px}.field input,.field select{font:inherit;color:var(--primary-text-color);background:var(--secondary-background-color);border:1px solid var(--divider-color);border-radius:8px;padding:8px}.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.diagnostics{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,2fr);gap:10px 16px}.diagnostics dt{color:var(--secondary-text-color)}.diagnostics dd{margin:0;overflow-wrap:anywhere}.notice{margin:0 0 16px;padding:12px 14px;border-radius:10px;background:var(--secondary-background-color);border-inline-start:4px solid var(--primary-color)}.notice.error{border-color:var(--error-color,#b3261e)}ha-icon{--mdc-icon-size:20px;vertical-align:middle;margin-inline-end:5px}
+      .field.ota-field{grid-template-columns:minmax(0,1fr)}[data-apk-file],[data-ota-kiosk]{width:100%;min-width:0}[data-apk-filename],[data-ota-upload]{overflow-wrap:anywhere}.ota-group+.ota-group{margin-top:24px}progress{width:min(100%,360px);accent-color:var(--primary-color)}
       @media(max-width:600px){.surface,.setting-group,.kiosk-card{padding:14px}.diagnostics{grid-template-columns:1fr auto}.field{grid-template-columns:1fr auto}nav{margin-inline:-4px}}
       </style>
       <header><img class="brand" src="/ha_gecko_kiosk_static/icon.png?v=brand-kit-v2" alt=""><h1>Gecko-kiosken</h1></header>
       <nav aria-label="Kioskbeheer">${tabs.map(([id,label,icon])=>`<button data-action="tab" data-tab="${id}" aria-current="${this._tab===id?"page":"false"}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`).join("")}</nav>
       <div class="notice error" role="alert" data-load-error ${this._loadError ? "" : "hidden"}>${this._escape(this._loadError)}</div>
       ${this._message?`<div class="notice ${this._messageKind}" role="${this._messageKind==="error"?"alert":"status"}">${this._escape(this._message)}</div>`:""}${content}`;
+    if (this._tab === "updates") {
+      const file = this.shadowRoot.querySelector("[data-apk-file]");
+      file.dataset.focusKey = "ota-file";
+      file.addEventListener("change", () => {
+        const selected = file.files?.[0];
+        this._apkFile = null;
+        if (selected && (!selected.name.toLowerCase().endsWith(".apk") || selected.size <= 0 || selected.size > 256 * 1024 * 1024)) {
+          this._message = "Kies een APK-bestand van maximaal 256 MiB.";
+          this._messageKind = "error";
+          file.value = "";
+          this._render();
+        } else {
+          this._apkFile = selected || null;
+          this._updateOta();
+        }
+      });
+      const picker = this.shadowRoot.querySelector("[data-ota-kiosk]");
+      picker.dataset.focusKey = "ota-kiosk";
+      picker.addEventListener("change", () => { this._selectedKiosk = picker.value; this._updateOta(); });
+    }
     for (const input of this.shadowRoot.querySelectorAll("[data-section][data-key]")) {
       input.dataset.focusKey=`${input.dataset.kiosk}:${input.dataset.section}:${input.dataset.key}`;
       const rememberDraft = () => {
@@ -366,12 +525,15 @@ class HaGeckoKioskPanel extends HTMLElement {
       button.disabled = button.disabled || this._busy;
       button.addEventListener("click", () => this._handleAction(button));
     });
+    if (this._tab === "updates") this._updateOta();
   }
 
   async _handleAction(button) {
     const action=button.dataset.action, kiosk=button.dataset.kiosk||this._selectedKiosk;
     if(action==="tab"){this._tab=button.dataset.tab;this._message="";this._render();return;}
     if(action==="select"){this._selectedKiosk=kiosk;this._message="";this._render();return;}
+    if(action==="ota-upload"){await this._uploadApk();return;}
+    if(action==="ota-install"){await this._installApk();return;}
     if(action==="discard"){
       this._captureState();
       for (const input of this.shadowRoot.querySelectorAll("[data-key]")) {

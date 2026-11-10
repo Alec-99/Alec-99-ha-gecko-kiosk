@@ -1,4 +1,4 @@
-"""Private CI artifact broker; repository credentials never leave Home Assistant."""
+"""Broker browser-uploaded APKs and optional private CI artifacts to kiosks."""
 
 from __future__ import annotations
 
@@ -14,16 +14,19 @@ from urllib.parse import quote, urlparse
 from aiohttp import web
 from homeassistant.components import mqtt
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
+from homeassistant.components.http.decorators import require_admin
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from . import DOMAIN, _ensure_kiosk, _require_capability, _state
+from . import DOMAIN, _ensure_kiosk, _require_capability, _state, _valid_segment
+from .apk import ApkError, inspect_apk
 
 from .ota_artifact import (
     Candidate,
     MAX_ARCHIVE,
+    MAX_APK,
     ARTIFACT_NAME,
     extract_verified_archive,
 )
@@ -67,6 +70,83 @@ class OtaDownloadView(HomeAssistantView):
         )
 
 
+class OtaUploadView(HomeAssistantView):
+    """Admin-only raw APK upload; staging never sends an install command."""
+
+    url = "/api/ha_gecko_kiosk/ota_upload"
+    name = "api:ha_gecko_kiosk:ota_upload"
+    requires_auth = True
+    max_body_size = MAX_APK
+
+    @require_admin
+    async def post(self, request):
+        manager = request.app[KEY_HASS].data.get(DOMAIN, {}).get("ota_manager")
+        if manager is None or manager.stopped:
+            raise web.HTTPServiceUnavailable()
+        if request.content_type not in (
+            "application/vnd.android.package-archive",
+            "application/octet-stream",
+        ):
+            return web.json_response({"message": "Upload een APK-bestand."}, status=415)
+        if request.content_length is not None and request.content_length > MAX_APK:
+            return web.json_response(
+                {"message": "De APK is groter dan 256 MiB."}, status=413
+            )
+        try:
+            async with asyncio.timeout(600):
+                metadata = await manager.upload(request.content)
+            return web.json_response(metadata, status=201)
+        except ApkError as error:
+            return web.json_response({"message": str(error)}, status=400)
+        except web.HTTPException:
+            raise
+        except TimeoutError:
+            return web.json_response(
+                {"message": "De upload duurde te lang. Probeer opnieuw."}, status=408
+            )
+        except (OSError, HomeAssistantError):
+            return web.json_response(
+                {"message": "De APK kon niet worden opgeslagen. Probeer opnieuw."},
+                status=503,
+            )
+
+
+class OtaInstallView(HomeAssistantView):
+    """An admin explicitly chooses the currently staged APK and a kiosk."""
+
+    url = "/api/ha_gecko_kiosk/ota_install"
+    name = "api:ha_gecko_kiosk:ota_install"
+    requires_auth = True
+    max_body_size = 4096
+
+    @require_admin
+    async def post(self, request):
+        manager = request.app[KEY_HASS].data.get(DOMAIN, {}).get("ota_manager")
+        if manager is None or manager.stopped:
+            raise web.HTTPServiceUnavailable()
+        try:
+            value = await request.json()
+            kiosk = value.get("kiosk") if isinstance(value, dict) else None
+            upload_id = value.get("upload_id") if isinstance(value, dict) else None
+            if (
+                not isinstance(kiosk, str)
+                or not _valid_segment(kiosk)
+                or len(kiosk) > 64
+                or not isinstance(upload_id, str)
+                or not re.fullmatch(r"[0-9a-f]{32}", upload_id)
+            ):
+                raise ValueError()
+        except (ValueError, TypeError):
+            return web.json_response(
+                {"message": "Kies een geldige kiosk en geüploade APK."}, status=400
+            )
+        try:
+            await manager.install(kiosk, upload_id=upload_id)
+        except HomeAssistantError as error:
+            return web.json_response({"message": str(error)}, status=400)
+        return web.json_response({"status": "requested", "kiosk": kiosk}, status=202)
+
+
 class OtaManager:
     def __init__(self, hass, entry):
         self.hass = hass
@@ -82,6 +162,8 @@ class OtaManager:
         self.pending_installs = set()
         self.expiry_timers = []
         self.stopped = False
+        self.uploaded = None
+        self.uploading = False
 
     @property
     def configured(self):
@@ -124,13 +206,19 @@ class OtaManager:
             return json.loads(chunks)
 
     async def check(self, force=False):
+        if self.uploaded:
+            return
         if self.stopped:
             return
         if not self.configured:
             self.candidate = None
             return
         async with self.lock:
-            if not force and self.last_check and time.monotonic() - self.last_check < 600:
+            if (
+                not force
+                and self.last_check
+                and time.monotonic() - self.last_check < 600
+            ):
                 return
             repository = self.entry.options["ota_repository"]
             workflow = quote(
@@ -250,7 +338,109 @@ class OtaManager:
                     "OTA artifact could not be downloaded or verified"
                 ) from None
 
+    @property
+    def upload_summary(self):
+        if self.uploaded is None:
+            return None
+        metadata = self.uploaded[0]
+        return {
+            key: metadata[key]
+            for key in ("upload_id", "version_name", "version_code", "size")
+        }
+
+    async def load_upload(self):
+        """Restore only a manifest verified against the cached APK after restart."""
+        self.uploaded = await self.hass.async_add_executor_job(self._load_upload)
+
+    def _load_upload(self):
+        try:
+            metadata_path = self.directory / "uploaded.json"
+            if metadata_path.stat().st_size > 4096:
+                return None
+            metadata = json.loads(metadata_path.read_text())
+            if (
+                not isinstance(metadata, dict)
+                or not isinstance(metadata.get("sha256"), str)
+                or not re.fullmatch(r"[0-9a-f]{64}", metadata["sha256"])
+                or not isinstance(metadata.get("upload_id"), str)
+                or not re.fullmatch(r"[0-9a-f]{32}", metadata["upload_id"])
+            ):
+                return None
+            path = self.directory / (metadata["sha256"] + ".apk")
+            actual = inspect_apk(path)
+            if any(metadata.get(key) != value for key, value in actual.items()):
+                return None
+            return {**actual, "upload_id": metadata["upload_id"]}, path
+        except (OSError, ValueError):
+            return None
+
+    def _save_upload_metadata(self, metadata):
+        temporary = self.directory / "uploaded.json.part"
+        try:
+            temporary.write_text(json.dumps(metadata))
+            temporary.replace(self.directory / "uploaded.json")
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    async def upload(self, content):
+        if self.uploading:
+            raise web.HTTPConflict(
+                text="Er wordt al een APK geüpload. Wacht tot die upload is voltooid."
+            )
+        self.uploading = True
+        temporary = self.directory / (secrets.token_hex(16) + ".upload.part")
+        try:
+            async with self.download_lock:
+                if self.stopped:
+                    raise HomeAssistantError("OTA controller is unloading")
+                await self.hass.async_add_executor_job(
+                    self.directory.mkdir, 0o700, True, True
+                )
+                stream = await self.hass.async_add_executor_job(temporary.open, "wb")
+                try:
+                    size = 0
+                    async for chunk in content.iter_chunked(256 * 1024):
+                        if self.stopped:
+                            raise HomeAssistantError("OTA controller is unloading")
+                        size += len(chunk)
+                        if size > MAX_APK:
+                            raise web.HTTPRequestEntityTooLarge(
+                                max_size=MAX_APK, actual_size=size
+                            )
+                        await self.hass.async_add_executor_job(stream.write, chunk)
+                finally:
+                    await self.hass.async_add_executor_job(stream.close)
+                metadata = await self.hass.async_add_executor_job(
+                    inspect_apk, temporary
+                )
+                if self.stopped:
+                    raise HomeAssistantError("OTA controller is unloading")
+                metadata["upload_id"] = secrets.token_hex(16)
+                target = self.directory / (metadata["sha256"] + ".apk")
+                await self.hass.async_add_executor_job(temporary.replace, target)
+                await self.hass.async_add_executor_job(
+                    self._save_upload_metadata, metadata
+                )
+                self.uploaded = metadata, target
+                keep = {
+                    job["path"]
+                    for job in self.jobs.values()
+                    if job["expires"] > time.monotonic()
+                }
+                await self.hass.async_add_executor_job(self._prune_cache, keep)
+            for kiosk_id in list(_state(self.hass)):
+                self.notify(kiosk_id)
+            return self.upload_summary
+        finally:
+            self.uploading = False
+            await self.hass.async_add_executor_job(temporary.unlink, True)
+
     def _prune_cache(self, keep):
+        keep = set(keep)
+        if self.uploaded:
+            keep.add(self.uploaded[1])
+        if self.prepared:
+            keep.add(self.prepared[2])
         for path in self.directory.glob("*.apk"):
             if path not in keep:
                 path.unlink(missing_ok=True)
@@ -269,37 +459,58 @@ class OtaManager:
         finally:
             await self.hass.async_add_executor_job(stream.close)
 
-    async def install(self, kiosk_id):
+    async def install(self, kiosk_id, upload_id=None):
         if kiosk_id in self.pending_installs:
-            raise HomeAssistantError("An OTA update is already being prepared")
+            raise HomeAssistantError(
+                "Er wordt al een update voor deze kiosk voorbereid."
+            )
         self.pending_installs.add(kiosk_id)
         try:
-            await self._install(kiosk_id)
+            await self._install(kiosk_id, upload_id)
         finally:
             self.pending_installs.discard(kiosk_id)
 
-    async def _install(self, kiosk_id):
+    async def _install(self, kiosk_id, upload_id=None):
         if self.stopped:
             raise HomeAssistantError("OTA controller is unloading")
+        manifest = _state(self.hass).get(kiosk_id, {}).get("capabilities", {})
+        if not manifest.get("compatible") or "ota.install" not in manifest.get(
+            "capabilities", []
+        ):
+            raise HomeAssistantError(
+                "Deze kiosk ondersteunt nog geen OTA. Installeer eerst app 0.8.6 of nieuwer."
+            )
         _require_capability(self.hass, kiosk_id, "ota.install")
         state = _state(self.hass).get(kiosk_id, {})
         if state.get("availability") != "online":
-            raise HomeAssistantError("Kiosk is offline")
+            raise HomeAssistantError("De kiosk is offline.")
         if state.get("ota", {}).get("status") in ACTIVE:
-            raise HomeAssistantError("An OTA update is already active")
-        await self.check()
-        candidate = self.candidate
-        if candidate is None:
-            raise HomeAssistantError("No successful OTA build is available")
-        manifest, path = await self.prepare(candidate)
+            raise HomeAssistantError("Er loopt al een update voor deze kiosk.")
+        uploaded = self.uploaded
+        if upload_id is not None and (
+            uploaded is None or uploaded[0]["upload_id"] != upload_id
+        ):
+            raise HomeAssistantError(
+                "De beschikbare APK is gewijzigd. Vernieuw de pagina en controleer de versie."
+            )
+        if uploaded:
+            manifest, path = uploaded
+        else:
+            await self.check()
+            candidate = self.candidate
+            if candidate is None:
+                raise HomeAssistantError("Upload eerst een APK via App-updates.")
+            manifest, path = await self.prepare(candidate)
         if self.stopped:
             raise HomeAssistantError("OTA controller is unloading")
         # Require a real version-code report, never infer Android ordering from a label.
         current = _state(self.hass)[kiosk_id].get("ota", {}).get("version_code")
         if type(current) is not int or manifest["version_code"] <= current:
-            raise HomeAssistantError("OTA requires a newer Android version code")
+            raise HomeAssistantError(
+                "De APK moet een hoger buildnummer hebben dan de geïnstalleerde app."
+            )
         if _state(self.hass)[kiosk_id].get("availability") != "online":
-            raise HomeAssistantError("Kiosk went offline")
+            raise HomeAssistantError("De kiosk is offline gegaan.")
         _require_capability(self.hass, kiosk_id, "ota.install")
         now = time.monotonic()
         self.jobs = {

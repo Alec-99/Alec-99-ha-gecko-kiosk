@@ -4,7 +4,7 @@
 
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
-**Integration version:** `0.4.2` · **Domain:** `ha_gecko_kiosk`.
+**Integration version:** `0.5.0` · **Domain:** `ha_gecko_kiosk`.
 
 ## Installeren in Home Assistant (HACS / Marketplace)
 
@@ -26,7 +26,7 @@ Handmatig installeren: kopieer de map `custom_components/ha_gecko_kiosk` naar `/
 - Bevestigingsvensters, berichten en cameravensters met antwoordevents
 - Schermbeveiligingsmeldingen en UI-instellingen
 - Tabletbediening waaronder helderheid, volume en dashboard herladen
-- APK-OTA via een HA-update-entiteit, met privé CI-bron, tijdelijke downloadrechten en Android-installatiecontrole
+- APK uploaden vanuit de browser en op een gekozen kiosk installeren; voortgang ook via een HA-update-entiteit
 
 Beschikbare HA-acties: `ha_gecko_kiosk.camera`, `ha_gecko_kiosk.device`, `ha_gecko_kiosk.popup`, `ha_gecko_kiosk.notification`, `ha_gecko_kiosk.set_screensaver`, `ha_gecko_kiosk.set_camera_popup`, `ha_gecko_kiosk.get_settings`, `ha_gecko_kiosk.reset_settings`.
 
@@ -48,9 +48,13 @@ Na bijwerken **HA herstarten**. MQTT moet aangesloten zijn en de kiosk moet opni
 
 Installeer eerst één keer handmatig een OTA-geschikte app (Gecko 0.8.6 of nieuwer) met dezelfde signing key. Oudere apps kunnen zichzelf nog niet via MQTT bijwerken.
 
-Open de **opties van HA Gecko Kiosk** bij Apparaten en diensten. Stel je private GitHub-repository, vertrouwde buildbranch, workflowbestandsnaam en een token met **Actions: Read** in. Het token blijft in HA; een leeg tokenveld behoudt het bestaande token. Maak de repository leeg om de bron uit te schakelen. Kies daarna de **App-update**-entiteit van de kiosk.
+1. Open **Gecko-kiosken → App-updates**.
+2. Kies je `.apk`-bestand en klik **APK uploaden**. HA leest versie en buildnummer automatisch uit het bestand.
+3. Selecteer de kiosk en klik **Installeren op …**. De voortgang verschijnt in hetzelfde scherm.
 
-HA selecteert alleen niet-verlopen tablet-APK-artifacts van geslaagde `push`/`workflow_dispatch`-runs uit die repository en branch. De build moet `ota-manifest.json` naast de APK leveren. De kiosk controleert SHA-256, pakketnaam, een hoger Android-versienummer en dezelfde ondertekening. Android kan toestemming voor installeren vanuit deze app en lokale installatiebevestiging vragen. Er is geen automatische publicatie of stille-installatiebelofte.
+Je hebt hiervoor geen GitHub-token, repository-instellingen of apart manifestbestand nodig. De geüploade APK blijft beschikbaar na een HA-herstart en verschijnt ook in de **App-update**-entiteit. Oudere of gelijke buildnummers worden geweigerd; de tablet controleert de hash, pakketnaam en ondertekening. Android kan om lokale installatiebevestiging vragen.
+
+De eerder toegevoegde GitHub CI-bron blijft optioneel beschikbaar via de integratieopties. Een browserupload krijgt voorrang op die bron.
 
 Zie [OTA-protocol, configuratie en beperkingen](docs/OTA.md).
 

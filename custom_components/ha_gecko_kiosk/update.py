@@ -35,7 +35,16 @@ class KioskUpdate(KioskEntity, UpdateEntity):
 
     @property
     def latest_version(self):
+        if self.ota.uploaded:
+            return self.ota.uploaded[0]["version_name"]
         return self.ota.candidate.version_name if self.ota.candidate else None
+
+    def version_is_newer(self, latest_version, installed_version):
+        if self.ota.uploaded:
+            current = self.kiosk.get("ota", {}).get("version_code")
+            if type(current) is int:
+                return self.ota.uploaded[0]["version_code"] > current
+        return super().version_is_newer(latest_version, installed_version)
 
     @property
     def in_progress(self):
@@ -48,9 +57,9 @@ class KioskUpdate(KioskEntity, UpdateEntity):
     @property
     def release_summary(self):
         status = self.kiosk.get("ota", {}).get("status", "idle")
-        if not self.ota.configured:
-            return "Configureer de privé-APK-bron via de integratieopties."
-        if self.ota.error:
+        if not self.ota.uploaded and not self.ota.configured:
+            return "Upload een APK via Gecko-kiosken → App-updates."
+        if not self.ota.uploaded and self.ota.error:
             return "APK-bron niet bereikbaar; controleer de integratieopties."
         return {
             "permission_required": "Sta op de tablet installatie door HA Gecko Kiosk toe en keer terug naar de app.",
@@ -65,7 +74,9 @@ class KioskUpdate(KioskEntity, UpdateEntity):
             "cancelled": "Installatie geannuleerd.",
         }.get(
             status,
-            "Privé CI-build; Android controleert pakket, versie en ondertekening.",
+            "Geüploade APK; Android controleert pakket, versie en ondertekening."
+            if self.ota.uploaded
+            else "Privé CI-build; Android controleert pakket, versie en ondertekening.",
         )
 
     @property

@@ -1,21 +1,61 @@
 # APK OTA through Home Assistant
 
-The integration brokers a private GitHub Actions artifact to an OTA-capable
-kiosk. Repository credentials stay in HA config-entry options. They are never
-included in the kiosk read model, entity attributes or MQTT commands.
+From integration **0.5.0**, an administrator can upload a plain APK in the HA
+browser panel and explicitly install it on a selected kiosk. No repository,
+GitHub token or companion manifest is needed. The existing private CI source is
+an optional alternative.
 
-## Setup
+## Browser upload
 
 1. Manually install the first OTA-capable Android build (Gecko 0.8.6+) using the
-   same signing key as the installed app. Do not uninstall to bypass a key mismatch.
-2. Configure the integration options: `owner/repository`, trusted branch,
-   workflow filename (default `build-ha-gecko-kiosk.yml`), and an Actions-read
-   GitHub token restricted to that repository. No source is enabled by default.
-3. Reconnect the kiosk. Its `ota.install` capability creates an **App-update**
-   entity. Open that entity and select Install when a newer build is available.
-4. On Android, grant this app permission to install packages if requested, return
-   to the kiosk and confirm Android's installation prompt. No root or device-owner
-   setup is required. Installation is deliberately user-confirmed on modern Android.
+   same signing key as the installed app. Existing OTA-capable installations do
+   not need a new Android build for this browser upload feature.
+2. Update the HA integration, restart HA, and open **Gecko-kiosken → App-updates**.
+3. Choose the `.apk` file and press **APK uploaden**. HA reads the actual package,
+   version name and Android build number from the APK's binary manifest, computes
+   SHA-256 and stores it privately. The limit is 256 MiB. Uploading does not install.
+4. Select a kiosk and press **Installeren op …**. HA requires an online OTA-capable
+   client, a reported installed build number and a strictly higher uploaded build.
+   The request is bound to the uploaded artifact ID so a concurrent replacement
+   cannot silently substitute another file.
+5. Follow progress in the same panel or the kiosk's **App-update** entity. If
+   requested, allow Android installation by this app, return to the kiosk and
+   confirm Android's installation prompt.
+
+Both upload and install endpoints require an authenticated HA administrator.
+Wrong apps, corrupt manifests, unsupported versions, oversized archives and
+unsafe metadata are rejected before staging. The server reads bounded ZIP/binary
+XML metadata without extracting or executing APK contents or adding an Android
+SDK dependency. Android still verifies package signatures before installation.
+
+The current upload is retained in HA's private `.storage/ha_gecko_kiosk_ota`
+directory and verified again when the integration starts. Uploading a replacement
+keeps an existing in-flight download valid. Aborted, invalid and oversized uploads
+leave the previous staged file available and remove partial files. Unneeded older
+APKs are pruned. A staged upload takes priority over the optional CI source.
+Android build codes determine ordering, including builds with the same version
+label. Source files, local paths and download grants are not exposed in the panel.
+
+Admin upload API: `POST /api/ha_gecko_kiosk/ota_upload`, with the raw APK body and
+Content-Type `application/vnd.android.package-archive` or `application/octet-stream`.
+The 201 response contains `upload_id`, `version_name`, `version_code` and `size`.
+An admin explicitly starts installation with `POST /api/ha_gecko_kiosk/ota_install`
+and JSON `{"kiosk":"tablet_a","upload_id":"<uploaded ID>"}`. The existing admin
+WebSocket list exposes `ota_upload` metadata for the panel, without file paths or
+credentials. The device download grant and MQTT protocol below are unchanged.
+
+## Optional private CI source
+
+Configure the integration options with `owner/repository`, a trusted branch,
+workflow filename (default `build-ha-gecko-kiosk.yml`), and an Actions-read GitHub
+token restricted to that repository. Leave the token blank to preserve it; clear
+the repository to disable the CI source. Credentials stay in HA and are never
+included in kiosk state, entity attributes or MQTT commands. This configuration is
+not required for browser uploads.
+
+A CI artifact must follow the contract below. Select Install on the kiosk's
+**App-update** entity when a newer build is available. The same Android permission
+and confirmation requirements apply.
 
 The tablet must reach `/api/ha_gecko_kiosk/ota/...` at the same HA origin as its
 configured dashboard. A reverse proxy must pass this route and its Authorization

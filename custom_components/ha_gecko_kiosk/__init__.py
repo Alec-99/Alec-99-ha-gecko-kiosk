@@ -696,7 +696,9 @@ def websocket_list_kiosks(
     msg: dict[str, Any],
 ) -> None:
     """Return all kiosks observed through MQTT."""
-    connection.send_result(msg["id"], {"kiosks": list(_state(hass).values())})
+    ota = hass.data.get(DOMAIN, {}).get("ota_manager")
+    connection.send_result(msg["id"], {"kiosks": list(_state(hass).values()),
+                                        "ota_upload": ota.upload_summary if ota else None})
 
 
 async def _register_panel(hass: HomeAssistant) -> None:
@@ -901,12 +903,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     for kiosk_id in list(_state(hass)):
         manager.metadata_updated(kiosk_id)
         manager.update(kiosk_id)
-    from .ota import OtaManager, OtaDownloadView
+    from .ota import OtaManager, OtaDownloadView, OtaUploadView, OtaInstallView
     data = hass.data[DOMAIN]
     data["ota_manager"] = OtaManager(hass, entry)
+    await data["ota_manager"].load_upload()
     if not data.get("_ota_view_registered"):
         hass.http.register_view(OtaDownloadView())
         data["_ota_view_registered"] = True
+    if not data.get("_ota_upload_views_registered"):
+        hass.http.register_view(OtaUploadView())
+        hass.http.register_view(OtaInstallView())
+        data["_ota_upload_views_registered"] = True
 
     @callback
     def receive_ota(message):

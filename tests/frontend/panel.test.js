@@ -80,9 +80,9 @@ test('overview handles empty, single and multiple kiosks with truthful availabil
   assert.ok(panel.shadowRoot.querySelector('.pill.unknown'));
 });
 
-test('navigation exposes distinct overview, controls, settings and diagnostics sections', async () => {
+test('navigation exposes distinct overview, controls, settings and updates and diagnostics sections', async () => {
   setup([kiosk('alpha')]);
-  assert.equal(panel.shadowRoot.querySelectorAll('nav [data-action="tab"]').length, 4);
+  assert.equal(panel.shadowRoot.querySelectorAll('nav [data-action="tab"]').length, 5);
   await click('[data-tab="controls"]');
   assert.match(panel.shadowRoot.textContent, /Camera: doorbell/);
   await click('[data-tab="settings"]');
@@ -371,4 +371,103 @@ test('polling retains navigation focus and scroll positions in a scrolling HA co
   assert.equal(container.scrollTop, 240);
   assert.equal(panel.shadowRoot.querySelector('nav').scrollLeft, 80);
   assert.equal(panel.shadowRoot.activeElement.dataset.tab, 'diagnostics');
+});
+
+
+function otaDevice(id = 'alpha', version = 17) {
+  const device = kiosk(id, 'online', { compatible: true, capabilities: ['ota.install'] });
+  device.ota = { status: 'idle', version_code: version, version_name: '0.8.6-test', progress: 0 };
+  return device;
+}
+
+function chooseApk(name = 'kiosk.apk', size = 1024) {
+  const file = new dom.window.File(['synthetic browser fixture'], name, { type: 'application/vnd.android.package-archive' });
+  Object.defineProperty(file, 'size', { value: size });
+  const input = panel.shadowRoot.querySelector('[data-apk-file]');
+  Object.defineProperty(input, 'files', { configurable: true, value: [file] });
+  input.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  return file;
+}
+
+function uploadMetadata() { return { upload_id: 'a'.repeat(32), version_name: '0.8.7-test', version_code: 18, size: 1024 }; }
+
+test('APK upload uses HA authentication, reads metadata and installs only after an explicit target action', async () => {
+  setup([otaDevice()]);
+  const requests = [];
+  panel._hass.fetchWithAuth = async (path, options) => {
+    requests.push([path, options]);
+    return { ok: true, json: async () => path.endsWith('ota_upload') ? uploadMetadata() : { status: 'requested' } };
+  };
+  panel._hass.connection.sendMessagePromise = async () => ({ kiosks: list, ota_upload: panel._otaUpload });
+  await click('[data-tab="updates"]');
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-upload"]').disabled, true);
+  const file = chooseApk();
+  await click('[data-action="ota-upload"]');
+  assert.equal(requests.length, 1, 'Uploading must not automatically install');
+  assert.equal(requests[0][0], '/api/ha_gecko_kiosk/ota_upload');
+  assert.equal(requests[0][1].body, file);
+  assert.equal(requests[0][1].headers['Content-Type'], 'application/vnd.android.package-archive');
+  assert.match(panel.shadowRoot.textContent, /0\.8\.7-test/);
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
+  await click('[data-action="ota-install"]');
+  assert.equal(requests[1][0], '/api/ha_gecko_kiosk/ota_install');
+  assert.deepEqual(JSON.parse(requests[1][1].body), { kiosk: 'alpha', upload_id: 'a'.repeat(32) });
+  assert.equal(calls.length, 0, 'No legacy service should bypass the upload selection');
+  assert.match(panel.shadowRoot.textContent, /Update aangevraagd/);
+});
+
+test('APK selection and file input survive polling; displayed progress follows the selected kiosk', async () => {
+  setup([otaDevice(), otaDevice('beta')]);
+  panel._otaUpload = uploadMetadata();
+  panel._hass.connection.sendMessagePromise = async () => ({ kiosks: list, ota_upload: uploadMetadata() });
+  await click('[data-tab="updates"]');
+  const input = panel.shadowRoot.querySelector('[data-apk-file]');
+  const file = chooseApk('<img onerror=alert(1)>.apk');
+  list[0].ota = { ...list[0].ota, status: 'downloading', progress: 35 };
+  await panel._refresh();
+  assert.equal(panel.shadowRoot.querySelector('[data-apk-file]'), input);
+  assert.equal(panel._apkFile, file);
+  assert.equal(panel.shadowRoot.querySelector('[data-apk-filename] img'), null);
+  assert.match(panel.shadowRoot.querySelector('[data-ota-status]').textContent, /35%/);
+  const picker = panel.shadowRoot.querySelector('[data-ota-kiosk]');
+  picker.value = 'beta'; picker.dispatchEvent(new dom.window.Event('change'));
+  assert.equal(panel._selectedKiosk, 'beta');
+  assert.match(panel.shadowRoot.querySelector('[data-action="ota-install"]').textContent, /beta/);
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
+});
+
+test('APK controls reject other file types, oversized files, offline and legacy clients, downgrades and busy installers', async () => {
+  setup([otaDevice()]);
+  await click('[data-tab="updates"]');
+  for (const [name, size] of [['archive.zip', 100], ['app.apk', 0], ['app.apk', 256*1024*1024+1]]) {
+    chooseApk(name, size);
+    assert.equal(panel._apkFile, null);
+    assert.equal(panel.shadowRoot.querySelector('[data-action="ota-upload"]').disabled, true);
+  }
+  panel._otaUpload = uploadMetadata();
+  for (const device of [kiosk('alpha'), { ...otaDevice(), availability: 'offline' }, otaDevice('alpha', 18),
+                        { ...otaDevice(), ota: { status: 'awaiting_confirmation', version_code: 17 } }]) {
+    panel._kiosks = [device]; panel._updateOta();
+    assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, true);
+  }
+});
+
+test('APK errors are escaped, previous upload stays usable and a pending upload cannot be submitted twice', async () => {
+  setup([otaDevice()]);
+  panel._otaUpload = uploadMetadata();
+  await click('[data-tab="updates"]');
+  chooseApk();
+  let complete;
+  let requests = 0;
+  panel._hass.fetchWithAuth = () => { requests++; return new Promise(resolve => { complete = resolve; }); };
+  const uploading = panel._uploadApk();
+  await panel._uploadApk();
+  assert.equal(requests, 1);
+  assert.equal(panel.shadowRoot.querySelector('[data-upload-progress]').hidden, false);
+  complete({ ok: false, json: async () => ({ message: '<img src=x onerror=alert(1)> Ongeldige APK' }) });
+  await uploading;
+  assert.equal(panel.shadowRoot.querySelector('[role="alert"] img'), null);
+  assert.match(panel.shadowRoot.textContent, /Ongeldige APK/);
+  assert.equal(panel._otaUpload.version_code, 18);
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
 });
