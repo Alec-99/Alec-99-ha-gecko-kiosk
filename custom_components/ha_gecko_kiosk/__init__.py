@@ -143,6 +143,67 @@ def _ensure_kiosk(hass: HomeAssistant, kiosk_id: str) -> dict[str, Any]:
     )
 
 
+@callback
+def _process_message(hass: HomeAssistant, message: mqtt.ReceiveMessage, handler) -> None:
+    """Update the existing protocol model before notifying entity platforms."""
+    handler(hass, message)
+    parts = message.topic.split("/")
+    manager = hass.data.get(DOMAIN, {}).get("registry_manager")
+    if manager is not None and len(parts) >= 3 and parts[0] == TOPIC_PREFIX and _valid_segment(parts[1]) and len(parts[1]) <= 64:
+        manager.update(parts[1])
+
+
+def _message_callback(hass: HomeAssistant, handler):
+    """Keep MQTT's synchronous callbacks on the HA event loop."""
+    @callback
+    def receive(message):
+        _process_message(hass, message, handler)
+    return receive
+
+
+@callback
+def _handle_discovery_metadata(hass: HomeAssistant, message: mqtt.ReceiveMessage) -> None:
+    """Read only bounded identity/state mappings from kiosk-owned MQTT discovery."""
+    try:
+        if len(message.payload) > 131072: return
+        value = json.loads(message.payload)
+        if not isinstance(value, dict): return
+        components = value.get("cmps", value.get("components", {}))
+        device = value.get("dev", value.get("device", {}))
+        if not isinstance(components, dict) or len(components) > 256 or not isinstance(device, dict): return
+        matches = []
+        for component in components.values():
+            if not isinstance(component, dict): continue
+            topic = component.get("state_topic", component.get("stat_t", ""))
+            if not isinstance(topic, str): continue
+            parts = topic.split("/")
+            if len(parts) >= 3 and parts[0] == TOPIC_PREFIX and _valid_segment(parts[1]) and len(parts[1]) <= 64:
+                matches.append((parts[1], "/".join(parts[2:]), component))
+        kiosk_ids = {item[0] for item in matches}
+        if len(kiosk_ids) != 1: return
+        kiosk_id = kiosk_ids.pop()
+        identifiers = device.get("ids", device.get("identifiers", []))
+        if isinstance(identifiers, str): identifiers = [identifiers]
+        if not isinstance(identifiers, list) or len(identifiers) > 16: return
+        meta = {"received_at": time.monotonic(), "identifiers": [i for i in identifiers if isinstance(i, str) and 0 < len(i) <= 128], "entities": {}}
+        for short, long in (("name", "name"), ("mf", "manufacturer"), ("mdl", "model")):
+            field = device.get(short, device.get(long))
+            if isinstance(field, str) and 0 < len(field) <= 128: meta[long] = field
+        for _, suffix, component in matches:
+            platform = component.get("p", component.get("platform"))
+            unique_id = component.get("unique_id", component.get("uniq_id"))
+            if platform in ("sensor", "binary_sensor", "number", "switch", "button") and isinstance(unique_id, str) and 0 < len(unique_id) <= 128:
+                meta["entities"][f"{platform}:{suffix}"] = unique_id
+        hass.data[DOMAIN].setdefault("discovery_metadata", {})[kiosk_id] = meta
+        _ensure_kiosk(hass, kiosk_id)
+        manager = hass.data[DOMAIN].get("registry_manager")
+        if manager is not None:
+            manager.metadata_updated(kiosk_id)
+            manager.update(kiosk_id)
+    except (ValueError, TypeError, AttributeError):
+        return
+
+
 def _topic_parts(message: mqtt.ReceiveMessage) -> list[str]:
     return message.topic.split("/")
 
@@ -641,11 +702,14 @@ def websocket_list_kiosks(
 async def _register_panel(hass: HomeAssistant) -> None:
     integration_dir = Path(__file__).parent
     frontend_dir = integration_dir / "frontend"
-    panel_version = sha256((frontend_dir / "ha-gecko-kiosk-panel.js").read_bytes()).hexdigest()[:12]
+    panel_bytes = await hass.async_add_executor_job((frontend_dir / "ha-gecko-kiosk-panel.js").read_bytes)
+    panel_version = sha256(panel_bytes).hexdigest()[:12]
 
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(STATIC_URL, str(frontend_dir), cache_headers=False)]
-    )
+    if not hass.data[DOMAIN].get("_static_registered"):
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(STATIC_URL, str(frontend_dir), cache_headers=False)]
+        )
+        hass.data[DOMAIN]["_static_registered"] = True
 
     await panel_custom.async_register_panel(
         hass=hass,
@@ -660,17 +724,26 @@ async def _register_panel(hass: HomeAssistant) -> None:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up HA Gecko Kiosk from YAML."""
+    """Set up shared protocol subscriptions and import legacy YAML installations."""
+    if DOMAIN in config:
+        hass.async_create_task(hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "import"}, data={}
+        ))
     data = hass.data.setdefault(DOMAIN, {DATA_KIOSKS: {}, DATA_UNSUBS: []})
     if data.get("_initialized"):
         return True
     unsubs = data.setdefault(DATA_UNSUBS, [])
+    mqtt_entries = hass.config_entries.async_entries("mqtt")
+    prefix = mqtt_entries[0].options.get("discovery_prefix", "homeassistant") if mqtt_entries else "homeassistant"
+    unsubs.append(await mqtt.async_subscribe(
+        hass, f"{prefix}/device/+/config", _message_callback(hass, _handle_discovery_metadata), qos=1,
+    ))
 
     unsubs.append(
         await mqtt.async_subscribe(
             hass,
             f"{TOPIC_PREFIX}/+/availability",
-            lambda msg: _handle_availability(hass, msg),
+            _message_callback(hass, _handle_availability),
             qos=1,
         )
     )
@@ -678,7 +751,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await mqtt.async_subscribe(
             hass,
             f"{TOPIC_PREFIX}/+/status/+",
-            lambda msg: _handle_status(hass, msg),
+            _message_callback(hass, _handle_status),
             qos=1,
         )
     )
@@ -686,7 +759,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await mqtt.async_subscribe(
             hass,
             f"{TOPIC_PREFIX}/+/battery/+",
-            lambda msg: _handle_battery(hass, msg),
+            _message_callback(hass, _handle_battery),
             qos=1,
         )
     )
@@ -695,7 +768,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             await mqtt.async_subscribe(
                 hass,
                 f"{TOPIC_PREFIX}/+/{subsystem}/+",
-                lambda msg: _handle_device_state(hass, msg),
+                _message_callback(hass, _handle_device_state),
                 qos=1,
             )
         )
@@ -703,7 +776,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await mqtt.async_subscribe(
             hass,
             f"{TOPIC_PREFIX}/+/device/response",
-            lambda msg: _handle_device_response(hass, msg),
+            _message_callback(hass, _handle_device_response),
             qos=1,
         )
     )
@@ -712,7 +785,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             await mqtt.async_subscribe(
                 hass,
                 f"{TOPIC_PREFIX}/+/{suffix}",
-                lambda msg: _handle_diagnostic_state(hass, msg),
+                _message_callback(hass, _handle_diagnostic_state),
                 qos=1,
             )
         )
@@ -721,7 +794,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await mqtt.async_subscribe(
             hass,
             f"{TOPIC_PREFIX}/+/popup/response",
-            lambda msg: _handle_popup_response(hass, msg),
+            _message_callback(hass, _handle_popup_response),
             qos=1,
         )
     )
@@ -729,13 +802,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     unsubs.append(
         await mqtt.async_subscribe(
             hass, f"{TOPIC_PREFIX}/+/settings/state",
-            lambda msg: _handle_settings_state(hass, msg), qos=1,
+            _message_callback(hass, _handle_settings_state), qos=1,
         )
     )
     unsubs.append(
         await mqtt.async_subscribe(
             hass, f"{TOPIC_PREFIX}/+/settings/response",
-            lambda msg: _handle_settings_response(hass, msg), qos=1,
+            _message_callback(hass, _handle_settings_response), qos=1,
         )
     )
 
@@ -807,7 +880,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             unsub()
         unsubs.clear()
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, cleanup)
+    data["_stop_unsub"] = hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, cleanup)
 
     websocket_api.async_register_command(hass, websocket_list_kiosks)
     await _register_panel(hass)
@@ -815,6 +888,39 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+PLATFORMS = ("binary_sensor", "sensor", "switch", "number", "button")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Support installation through Settings > Devices & services."""
-    return await async_setup(hass, {})
+    """Register actual kiosk devices and supported native HA entity platforms."""
+    from .entity import KioskRegistry
+
+    await async_setup(hass, {})
+    manager = KioskRegistry(hass, entry)
+    hass.data[DOMAIN]["registry_manager"] = manager
+    for kiosk_id in list(_state(hass)):
+        manager.metadata_updated(kiosk_id)
+        manager.update(kiosk_id)
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Stop subscriptions and entity listeners; preserve registry IDs/history."""
+    from homeassistant.components import frontend
+
+    if not await hass.config_entries.async_unload_platforms(entry, PLATFORMS): return False
+    data = hass.data[DOMAIN]
+    manager = data.pop("registry_manager", None)
+    if manager is not None: manager.stop()
+    for unsub in list(data.get(DATA_UNSUBS, [])): unsub()
+    data.get(DATA_UNSUBS, []).clear()
+    stop_unsub = data.pop("_stop_unsub", None)
+    if stop_unsub is not None: stop_unsub()
+    data[DATA_KIOSKS] = {}
+    data["_initialized"] = False
+    frontend.async_remove_panel(hass, PANEL_URL)
+    for service in (SERVICE_CAMERA, SERVICE_DEVICE, SERVICE_POPUP, SERVICE_NOTIFICATION,
+                    SERVICE_SET_SCREENSAVER, SERVICE_SET_CAMERA_POPUP, SERVICE_GET_SETTINGS, SERVICE_RESET_SETTINGS):
+        hass.services.async_remove(DOMAIN, service)
+    return True

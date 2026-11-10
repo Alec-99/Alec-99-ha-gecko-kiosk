@@ -30,3 +30,7 @@ class HaGeckoKioskConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=vol.Schema({}),
         )
+
+    async def async_step_import(self, user_input: dict[str, Any]) -> config_entries.ConfigFlowResult:
+        """Give YAML installations the same device/entity config-entry owner."""
+        return await self.async_step_user({})

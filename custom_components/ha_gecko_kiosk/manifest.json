@@ -1,7 +1,7 @@
 {
   "domain": "ha_gecko_kiosk",
   "name": "HA Gecko Kiosk",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "documentation": "https://github.com/Alec-99/Alec-99-ha-gecko-kiosk",
   "issue_tracker": "https://github.com/Alec-99/Alec-99-ha-gecko-kiosk/issues",
   "dependencies": [
@@ -13,6 +13,6 @@
     "@Alec-99"
   ],
   "iot_class": "local_push",
-  "integration_type": "service",
+  "integration_type": "hub",
   "config_flow": true
 }

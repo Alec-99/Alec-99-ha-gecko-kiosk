@@ -100,6 +100,29 @@ class ProtocolTest(unittest.TestCase):
     def setUp(self):
         self.hass = FakeHass()
 
+    def test_discovery_metadata_preserves_identity_without_copying_raw_config(self):
+        value = {"dev": {"ids": ["synthetic-device"], "name": "Synthetic tablet", "mf": "Example", "mdl": "Fixture"},
+                 "cmps": {"battery": {"p": "sensor", "unique_id": "synthetic_battery", "state_topic": "ha_kiosk/tablet_a/battery/level"}},
+                 "configuration_url": "https://example.invalid/private", "password": "synthetic-secret"}
+        kiosk._handle_discovery_metadata(self.hass, types.SimpleNamespace(payload=json.dumps(value)))
+        meta = self.hass.data[kiosk.DOMAIN]["discovery_metadata"]["tablet_a"]
+        self.assertEqual(["synthetic-device"], meta["identifiers"])
+        self.assertEqual("synthetic_battery", meta["entities"]["sensor:battery/level"])
+        self.assertNotIn("private", json.dumps(meta))
+        self.assertNotIn("synthetic-secret", json.dumps(meta))
+        self.assertNotIn("discovery_metadata", kiosk._ensure_kiosk(self.hass, "tablet_a"))
+
+    def test_discovery_metadata_rejects_mixed_kiosks_and_unbounded_identity(self):
+        value = {"dev": {"ids": ["synthetic-device"]}, "cmps": {
+            "a": {"state_topic": "ha_kiosk/tablet_a/battery/level"},
+            "b": {"state_topic": "ha_kiosk/tablet_b/battery/level"}}}
+        kiosk._handle_discovery_metadata(self.hass, types.SimpleNamespace(payload=json.dumps(value)))
+        self.assertNotIn("discovery_metadata", self.hass.data[kiosk.DOMAIN])
+        value["cmps"].pop("b")
+        value["dev"]["ids"] = ["device"] * 17
+        kiosk._handle_discovery_metadata(self.hass, types.SimpleNamespace(payload=json.dumps(value)))
+        self.assertNotIn("discovery_metadata", self.hass.data[kiosk.DOMAIN])
+
     def test_popup_response_must_match_origin_and_is_single_use(self):
         data = {
             "kiosk": "tablet_a",

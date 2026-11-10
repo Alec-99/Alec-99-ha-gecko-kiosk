@@ -4,7 +4,7 @@
 
 Public **Home Assistant custom integration** for an Android GeckoView kiosk controlled via MQTT. **Experimental**: validate on your own Home Assistant setup before relying on it.
 
-**Integration version:** `0.2.2` · **Domain:** `ha_gecko_kiosk`.
+**Integration version:** `0.3.0` · **Domain:** `ha_gecko_kiosk`.
 
 ## Installeren in Home Assistant (HACS / Marketplace)
 
@@ -20,6 +20,7 @@ Handmatig installeren: kopieer de map `custom_components/ha_gecko_kiosk` naar `/
 
 ## Functies / Features
 
+- Aangesloten kiosken als HA-apparaten, met native sensoren en bediening op basis van ondersteunde mogelijkheden
 - MQTT tabletstatus en beschikbaarheid; beheren via een HA-sidebarpaneel
 - Native cameracommandos: `prewarm`, `show`, `hide`, `stop`
 - Bevestigingsvensters, berichten en cameravensters met antwoordevents
@@ -33,6 +34,14 @@ Apparaattopics gebruiken het patroon `ha_kiosk/<device_id>/`. Wachtwoorden, loka
 De generieke capability-advertentie voor Gecko- en toekomstige kioskclients is beschreven in [MQTT capability manifest, version 1](docs/MQTT_CAPABILITIES.md).
 
 De sidebar, documentatie en integratie-iconen gebruiken de graphite/orange-identiteit; de volledige projectbrede bronset staat niet in deze publieke integratierepository.
+
+## Apparaten en entiteiten
+
+Vanaf 0.3.0 verschijnen kiosken bij **Instellingen → Apparaten en diensten → HA Gecko Kiosk** zodra hun status binnenkomt. Ondersteunde entiteiten: verbinding, kiosk actief, batterij/laden/temperatuur/spanning, appversie, watchdog, MQTT-herverbindingen, scherm, schermhelderheid, schermbeveiliging, volume, dempen, dashboard vernieuwen en het laatste opdrachtresultaat. Entiteiten ontstaan alleen bij bewijs van ondersteuning; offline bediening is geblokkeerd.
+
+Bestaande MQTT-discovery-entiteiten behouden hun ID en geschiedenis; de integratie voegt daarvoor geen tweede native equivalent toe. HA-versies met één apparaat per config-entry tonen het MQTT-apparaat en het integratieapparaat als gekoppelde apparaten via dezelfde bewezen identiteit. Op oudere HA-versies wordt het fysieke apparaat gedeeld. Naam, model en fabrikant worden alleen uit de kioskdiscovery overgenomen. YAML-installaties krijgen automatisch dezelfde config-entry.
+
+Na bijwerken **HA herstarten**. MQTT moet aangesloten zijn en de kiosk moet opnieuw verbinden om zijn discovery en status te melden. Geen apparaten zichtbaar: controleer eerst of `ha_kiosk/<id>/availability` en de overige statusberichten dezelfde broker bereiken.
 
 ## Scope en teststatus
 
