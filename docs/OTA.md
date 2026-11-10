@@ -44,6 +44,20 @@ and JSON `{"kiosk":"tablet_a","upload_id":"<uploaded ID>"}`. The existing admin
 WebSocket list exposes `ota_upload` metadata for the panel, without file paths or
 credentials. The device download grant and MQTT protocol below are unchanged.
 
+## Historical debug APK signing
+
+Earlier experimental Android APKs through 0.8.6 were found to use different
+signing keys between CI runs. A higher build number alone cannot make those APKs
+compatible. The fixed private debug signing line starts with 0.8.7 / build 18;
+0.8.8 / build 19 is its matching OTA test target. Builds now verify their approved
+certificate before offering an artifact.
+
+An existing differently signed installation needs its original private key or a
+one-time migration with a verified private backup of app settings. Do not remove
+that installation before preserving its data. HA cannot bypass Android's signature
+check. The first OTA-capable client requirement above describes protocol support,
+not a guarantee that historical debug APKs share a signing identity.
+
 ## Optional private CI source
 
 Configure the integration options with `owner/repository`, a trusted branch,
