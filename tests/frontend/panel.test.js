@@ -477,7 +477,7 @@ test('OTA reports distinguish transfer, verification and Android install failure
   const device = otaDevice();
   setup([device]);
   await click('[data-tab="updates"]');
-  for (const [detail, text] of [['download_failed', 'HA-URL'], ['verification_failed', 'ondertekening'], ['installer_failed', 'installatierechten'], ['timeout', 'niet op tijd']]) {
+  for (const [detail, text] of [['download_failed', 'HA-URL'], ['verification_failed', 'ondertekening'], ['installer_failed', 'installatierechten'], ['verify_signer_unavailable', 'Android 10'], ['timeout', 'niet op tijd']]) {
     device.ota = { ...device.ota, status: 'error', detail };
     panel._updateOta();
     assert.match(panel.shadowRoot.querySelector('[data-ota-status]').textContent, new RegExp(detail));
@@ -513,4 +513,14 @@ test('silent OTA blocks older clients and missing rights; interactive mode requi
   assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
   let body; panel._hass.fetchWithAuth = async (_path, options) => { body = JSON.parse(options.body); return {ok: true, json: async () => ({})}; };
   await panel._installApk(); assert.equal(body.require_silent, false);
+});
+
+
+test('missing OTA detail directs to source diagnostics instead of blind retries', async () => {
+  const device = otaDevice(); device.ota = {...device.ota, status: 'error'};
+  setup([device]); await click('[data-tab="updates"]');
+  const text = panel.shadowRoot.querySelector('[data-ota-status]').textContent;
+  assert.match(text, /zonder beschikbare foutcode/);
+  assert.match(text, /MQTT Explorer/);
+  assert.doesNotMatch(text, /probeer opnieuw/);
 });

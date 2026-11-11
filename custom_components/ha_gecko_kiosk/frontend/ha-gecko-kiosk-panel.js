@@ -321,7 +321,7 @@ class HaGeckoKioskPanel extends HTMLElement {
       verifying: "De kiosk controleert de APK.", permission_required: "Sta op de tablet installatie door HA Gecko Kiosk toe en keer terug naar de app.",
       awaiting_confirmation: "Bevestig de installatie op de tablet.", installing: "Android installeert de APK.",
       installed: "Installatie voltooid.", cancelled: "Installatie geannuleerd.",
-      error: "Update mislukt. Controleer de kiosk en probeer opnieuw.", idle: "Gereed voor een update.",
+      error: "Update mislukt zonder beschikbare foutcode. Bekijk het detailveld van ha_kiosk/<kiosk>/ota/state in MQTT Explorer en controleer of HA en het browserpaneel zijn bijgewerkt.", idle: "Gereed voor een update.",
     };
     if (["error", "silent_unavailable"].includes(state.status)) {
       const errors = {
@@ -343,6 +343,7 @@ class HaGeckoKioskPanel extends HTMLElement {
         verify_package_mismatch: "De APK hoort bij een andere app.",
         verify_version_mismatch: "Het buildnummer van de APK komt niet overeen met de updateopdracht.",
         verify_signer_mismatch: "De APK is met een andere sleutel ondertekend dan de geïnstalleerde app.",
+        verify_signer_unavailable: "Android kon de ondertekening niet uitlezen. Op Android 10 is app 0.8.11 of nieuwer nodig; werk de app één keer via USB bij.",
         verify_invalid_apk: "Android kan dit bestand niet als geldige APK lezen.",
         download_failed: "Downloaden of het voorbereiden van de installatie is mislukt. Controleer of de ingestelde HA-URL vanaf de tablet bereikbaar is.",
         verification_failed: "De APK-controle is mislukt: bestandsgrootte, hash, pakket, build of ondertekening wijkt af. Ook een proxy- of loginpagina kan deze fout veroorzaken.",

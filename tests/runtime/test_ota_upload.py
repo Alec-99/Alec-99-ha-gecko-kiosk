@@ -334,6 +334,9 @@ class BrowserOtaTest(unittest.IsolatedAsyncioTestCase):
         self.manager.receive("tablet_a", json.dumps(payload))
         self.assertEqual("silent_requires_setup", self.kiosk["ota"]["detail"])
         self.assertEqual(403, self.kiosk["ota"]["download_http_status"])
+        payload.update(status="error", detail="verify_signer_unavailable")
+        self.manager.receive("tablet_a", json.dumps(payload))
+        self.assertEqual("verify_signer_unavailable", self.kiosk["ota"]["detail"])
         payload.update(
             silent_install_ready="true",
             android_api=True,

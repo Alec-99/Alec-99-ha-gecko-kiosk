@@ -214,3 +214,20 @@ connection/timeout, incomplete download and APK hash/package/version/signer chec
 Older clients retain their broader error codes. The new 30-minute download deadline
 fixes the old two-minute whole-file limit; it does not establish the cause of an
 individual user's error without the reported detail code.
+
+
+## Android 10 archive-certificate compatibility
+
+Android 10 (API 29) only collects APK archive certificates when GET_SIGNATURES
+is included, even if GET_SIGNING_CERTIFICATES is requested. Older app builds
+therefore reported `verify_signer_mismatch` for matching keys because the archive
+SigningInfo was absent. App 0.8.11 / code 22 fixes the query by including both
+flags and still strictly compares the current certificates through SigningInfo.
+No unknown certificate or mismatched key is accepted. Missing certificates now
+report `verify_signer_unavailable`, supported by integration 0.6.1.
+
+An affected old client must be updated once in place via USB because its own
+verifier blocks OTA before the fixed app can be installed. Replacing the app
+with the same signer preserves data and Device Owner. App 0.8.12 / code 23 is
+the higher-version test target after installing corrected code 22. API 30 is
+Android 11; both API 29 and 30 are now in the Android CI matrix.

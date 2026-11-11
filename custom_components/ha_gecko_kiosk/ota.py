@@ -68,6 +68,7 @@ DETAIL_CODES = {
     "verify_version_mismatch",
     "verify_hash_mismatch",
     "verify_signer_mismatch",
+    "verify_signer_unavailable",
 }
 
 
