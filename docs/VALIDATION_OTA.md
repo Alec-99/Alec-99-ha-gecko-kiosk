@@ -60,3 +60,25 @@ The actual code 20 tablet APK also passed the upload manager for a synthetic
 online code 18 client with explicit interactive opt-in and mocked MQTT dispatch.
 Its real package metadata, size and SHA-256 were used. Android CI separately
 verifies the fixed signing identity before offering the APK.
+
+
+## Android 10 certificate collection correction
+
+App 0.8.11 / code 22 fixes Android 10 / API 29 archive-certificate collection by
+requesting GET_SIGNATURES as well as GET_SIGNING_CERTIFICATES, while retaining
+strict comparison of current signer SHA-256 values through SigningInfo.
+Integration 0.6.1 accepts the separate verify_signer_unavailable detail and gives
+a source-diagnostics action when the error detail is absent.
+
+Completed Android CI now separately covers Android 10 (API 29) and Android 11
+(API 30). Each passed 38 regression tests, a real interactive higher-version APK
+installation and a real unattended Device Owner installation. The silent proofs
+use no taps and no unknown-source app-op grant, and verify installed version,
+request ID, installed state, no user-action request and retained Device Owner.
+The wrong-key test explicitly requires verify_signer_mismatch. These checks were
+performed on disposable emulators; the physical tablet outcome remains separate.
+
+Integration 0.6.1 CI passed 27 pure protocol/APK tests, 16 runtime contracts and
+27 frontend tests. The actual code 23 tablet APK was also accepted by its upload
+manager for a synthetic code 22 client with strict silent mode and correct
+metadata/hash/size; MQTT dispatch was mocked for that additional upload check.
