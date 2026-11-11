@@ -45,3 +45,18 @@ explicit legacy opt-in and separate command/download deadlines. Device Owner
 installation is exercised in the Android application's separate emulator CI;
 this integration suite uses synthetic MQTT clients and does not prove a physical
 tablet's privileges or cross-network reachability.
+
+
+The app 0.8.9 / code 20 Android CI has now completed successfully. Its raw logs
+confirm 38 regression tests, an interactive installer test and an unattended
+Device Owner installer test (each one instrumentation test followed by host
+verification of the actually installed higher version, request ID and installed
+state). The unattended test ran on API 30 with no taps and no unknown-source
+app-op grant. This proves the emulator Device Owner path; it does not establish
+the privileges or network reachability of a user's physical tablet, or the
+Android 12+ self-update path without Device Owner.
+
+The actual code 20 tablet APK also passed the upload manager for a synthetic
+online code 18 client with explicit interactive opt-in and mocked MQTT dispatch.
+Its real package metadata, size and SHA-256 were used. Android CI separately
+verifies the fixed signing identity before offering the APK.
