@@ -471,3 +471,28 @@ test('APK errors are escaped, previous upload stays usable and a pending upload 
   assert.equal(panel._otaUpload.version_code, 18);
   assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
 });
+
+
+test('OTA reports distinguish transfer, verification and Android install failures with the exact code', async () => {
+  const device = otaDevice();
+  setup([device]);
+  await click('[data-tab="updates"]');
+  for (const [detail, text] of [['download_failed', 'HA-URL'], ['verification_failed', 'ondertekening'], ['installer_failed', 'installatierechten'], ['timeout', 'niet op tijd']]) {
+    device.ota = { ...device.ota, status: 'error', detail };
+    panel._updateOta();
+    assert.match(panel.shadowRoot.querySelector('[data-ota-status]').textContent, new RegExp(detail));
+    assert.match(panel.shadowRoot.querySelector('[data-ota-status]').textContent, new RegExp(text));
+  }
+  await click('[data-tab="diagnostics"]');
+  assert.match(panel.shadowRoot.textContent, /OTA-foutcode/);
+  assert.match(panel.shadowRoot.textContent, /timeout/);
+});
+
+test('unknown OTA error text is not reflected in the update message', async () => {
+  const device = otaDevice();
+  device.ota = { ...device.ota, status: 'error', detail: '<img src=x onerror=alert(1)> https://example.invalid/private' };
+  setup([device]);
+  await click('[data-tab="updates"]');
+  assert.doesNotMatch(panel.shadowRoot.querySelector('[data-ota-status]').textContent, /private|<img/);
+  assert.equal(panel.shadowRoot.querySelector('[data-ota-status] img'), null);
+});

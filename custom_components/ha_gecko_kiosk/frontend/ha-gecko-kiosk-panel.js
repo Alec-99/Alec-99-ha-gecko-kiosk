@@ -261,6 +261,8 @@ class HaGeckoKioskPanel extends HTMLElement {
       <dt>Watchdog-herstarts</dt><dd>${this._escape(diagnostics.watchdog_restart_count ?? "—")}</dd>
       <dt>MQTT-reconnects</dt><dd>${this._escape(diagnostics.mqtt_reconnect_count ?? "—")}</dd>
       <dt>Laatste bediening</dt><dd role="status">${this._escape(this._deviceCommandStatusText(kiosk))}</dd>
+      <dt>APK-update</dt><dd>${this._escape(this._otaStatusText(kiosk))}</dd>
+      <dt>OTA-foutcode</dt><dd>${this._escape(kiosk.ota?.detail || "—")}</dd>
       <dt>Batterij</dt><dd>${this._escape(battery.level ?? "—")}${battery.level == null ? "" : "%"}</dd>
       <dt>Opladen</dt><dd>${this._chargingText(battery.charging)}</dd>
       <dt>Batterijtemperatuur</dt><dd>${this._escape(battery.temperature ?? "—")}</dd>
@@ -320,6 +322,19 @@ class HaGeckoKioskPanel extends HTMLElement {
       installed: "Installatie voltooid.", cancelled: "Installatie geannuleerd.",
       error: "Update mislukt. Controleer de kiosk en probeer opnieuw.", idle: "Gereed voor een update.",
     };
+    if (state.status === "error") {
+      const errors = {
+        download_failed: "Downloaden of het voorbereiden van de installatie is mislukt. Controleer of de ingestelde HA-URL vanaf de tablet bereikbaar is.",
+        verification_failed: "De APK-controle is mislukt: bestandsgrootte, hash, pakket, build of ondertekening wijkt af. Ook een proxy- of loginpagina kan deze fout veroorzaken.",
+        installer_failed: "Android heeft de installatie niet kunnen uitvoeren. Controleer de installatierechten op de tablet.",
+        permission_required: "Android mist toestemming om de APK te installeren.",
+        interrupted: "De update is onderbroken doordat de app opnieuw is gestart.",
+        expired: "De updateaanvraag is verlopen voordat hij kon worden uitgevoerd.",
+        timeout: "De kiosk heeft de download niet op tijd afgerond of geen voortgang gemeld.",
+        publish_failed: "Home Assistant kon de updateopdracht niet via MQTT verzenden.",
+      };
+      if (errors[state.detail]) return `Update mislukt (${state.detail}). ${errors[state.detail]}`;
+    }
     const text = labels[state.status] || "Nog geen updatestatus ontvangen.";
     return state.status === "downloading" && Number.isInteger(state.progress)
       ? `${text}: ${Math.max(0, Math.min(100, state.progress))}%` : text;

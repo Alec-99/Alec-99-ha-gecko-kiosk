@@ -81,7 +81,8 @@ class KioskUpdate(KioskEntity, UpdateEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"ota_status": self.kiosk.get("ota", {}).get("status", "idle")}
+        return {"ota_status": self.kiosk.get("ota", {}).get("status", "idle"),
+                "ota_detail": self.kiosk.get("ota", {}).get("detail", "")}
 
     async def async_update(self):
         await self.ota.check()

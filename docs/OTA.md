@@ -162,3 +162,23 @@ Android prompt reports cancellation. Lost requests/downloads time out after ten
 minutes. A HA restart invalidates outstanding HTTP grants; retry after the
 client reports its interrupted download. Physical tablet installation remains a
 separate check from emulator validation.
+
+
+## Troubleshooting across networks
+
+The tablet initiates the download from the HA origin configured in its dashboard
+URL. No inbound tablet listener or extra OTA port is used. With an existing
+external HTTPS reverse proxy, the usual server-side port is 443; direct HA uses
+its configured HTTP(S) port, often 8123. Existing MQTT connectivity carries the
+command/status only and does not prove that the HA HTTP endpoint is reachable.
+A local HA address requires routing/VPN between networks; otherwise use a reachable
+HA HTTPS origin. The reverse proxy must forward the OTA path and Authorization
+header and accept the browser's APK upload size.
+
+Integration 0.5.1 displays the client's existing error code in App-updates and
+Diagnostiek, and exposes it as `ota_detail` on the update entity. This identifies
+whether the client reported `download_failed`, `verification_failed` or
+`installer_failed`; it does not assume that every failure is a network issue.
+Early app builds used broad failure codes, including some installer-preparation
+errors under `download_failed`. A verification error can also mean a proxy/login
+page was returned instead of the APK, not only a signing mismatch.
