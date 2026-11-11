@@ -46,13 +46,13 @@ Na bijwerken **HA herstarten**. MQTT moet aangesloten zijn en de kiosk moet opni
 
 ## APK-updates vanuit HA
 
-Installeer eerst één keer handmatig een OTA-geschikte app (Gecko 0.8.6 of nieuwer) met dezelfde signing key. Oudere apps kunnen zichzelf nog niet via MQTT bijwerken.
+Voor stille OTA is app **0.8.9 of nieuwer** met dezelfde signing key nodig, plus geschikte Android-installatierechten. De app rapporteert Android-versie en Device Owner-status. Oudere OTA-clients (0.8.6+) ondersteunen alleen de expliciet toegestane interactieve modus.
 
 1. Open **Gecko-kiosken → App-updates**.
 2. Kies je `.apk`-bestand en klik **APK uploaden**. HA leest versie en buildnummer automatisch uit het bestand.
 3. Selecteer de kiosk en klik **Installeren op …**. De voortgang verschijnt in hetzelfde scherm.
 
-Je hebt hiervoor geen GitHub-token, repository-instellingen of apart manifestbestand nodig. De geüploade APK blijft beschikbaar na een HA-herstart en verschijnt ook in de **App-update**-entiteit. Oudere of gelijke buildnummers worden geweigerd; de tablet controleert de hash, pakketnaam en ondertekening. Android kan om lokale installatiebevestiging vragen.
+Je hebt hiervoor geen GitHub-token, repository-instellingen of apart manifestbestand nodig. De geüploade APK blijft beschikbaar na een HA-herstart en verschijnt ook in de **App-update**-entiteit. Oudere of gelijke buildnummers worden geweigerd; de tablet controleert de hash, pakketnaam en ondertekening. **Zonder bevestiging op de tablet** staat standaard aan: de update stopt als Android bevestiging vereist. Android 10/11 heeft daarvoor Device Owner of privileged installatierechten nodig. Uitschakelen van die optie staat interactieve installatie toe. De HA-update-entiteit gebruikt altijd stille OTA.
 
 De eerder toegevoegde GitHub CI-bron blijft optioneel beschikbaar via de integratieopties. Een browserupload krijgt voorrang op die bron.
 

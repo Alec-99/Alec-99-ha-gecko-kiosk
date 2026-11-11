@@ -70,8 +70,8 @@ included in kiosk state, entity attributes or MQTT commands. This configuration 
 not required for browser uploads.
 
 A CI artifact must follow the contract below. Select Install on the kiosk's
-**App-update** entity when a newer build is available. The same Android permission
-and confirmation requirements apply.
+**App-update** entity when a newer build is available. This entity requires a
+silent-capable client and suitable Android installation rights.
 
 The tablet must reach `/api/ha_gecko_kiosk/ota/...` at the same HA origin as its
 configured dashboard. A reverse proxy must pass this route and its Authorization
