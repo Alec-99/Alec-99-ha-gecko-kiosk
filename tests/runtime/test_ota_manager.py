@@ -3,18 +3,19 @@
 import asyncio
 import hashlib
 import io
-import zipfile
 import json
-from pathlib import Path
 import tempfile
 import time
-from types import SimpleNamespace
 import unittest
+import zipfile
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from aiohttp import web, ClientSession
-from homeassistant.exceptions import HomeAssistantError
+from aiohttp import ClientSession, web
 from homeassistant.components.http import KEY_HASS
+from homeassistant.exceptions import HomeAssistantError
+
 from custom_components.ha_gecko_kiosk import DOMAIN
 from custom_components.ha_gecko_kiosk.ota import Candidate, OtaDownloadView, OtaManager
 
@@ -32,8 +33,16 @@ class OtaManagerTest(unittest.IsolatedAsyncioTestCase):
         self.kiosk = {
             "id": "tablet_a",
             "availability": "online",
-            "capabilities": {"compatible": True, "capabilities": ["ota.install"]},
-            "ota": {"version_code": 10, "version_name": "1.0", "status": "idle"},
+            "capabilities": {
+                "compatible": True,
+                "capabilities": ["ota.install", "ota.silent"],
+            },
+            "ota": {
+                "silent_install_ready": True,
+                "version_code": 10,
+                "version_name": "1.0",
+                "status": "idle",
+            },
         }
         self.hass = SimpleNamespace(
             data={DOMAIN: {"kiosks": {"tablet_a": self.kiosk}}},
@@ -286,6 +295,8 @@ class OtaManagerTest(unittest.IsolatedAsyncioTestCase):
             return {"artifacts": [artifact]}
 
         real.github_json = github
-        with patch("custom_components.ha_gecko_kiosk.ota.time.monotonic", return_value=5.0):
+        with patch(
+            "custom_components.ha_gecko_kiosk.ota.time.monotonic", return_value=5.0
+        ):
             await real.check()
         self.assertEqual(Candidate(7, "1.1", "a" * 40), real.candidate)

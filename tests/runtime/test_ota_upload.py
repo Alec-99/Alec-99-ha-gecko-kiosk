@@ -4,21 +4,22 @@ import asyncio
 import copy
 import importlib.util
 import json
-from pathlib import Path
 import tempfile
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from aiohttp import ClientSession, web
 from homeassistant.components.http import KEY_HASS
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
+
 from custom_components.ha_gecko_kiosk import DOMAIN
 from custom_components.ha_gecko_kiosk.ota import (
+    OtaDownloadView,
+    OtaInstallView,
     OtaManager,
     OtaUploadView,
-    OtaInstallView,
-    OtaDownloadView,
 )
 
 spec = importlib.util.spec_from_file_location(
@@ -44,8 +45,16 @@ class BrowserOtaTest(unittest.IsolatedAsyncioTestCase):
         self.kiosk = {
             "id": "tablet_a",
             "availability": "online",
-            "capabilities": {"compatible": True, "capabilities": ["ota.install"]},
-            "ota": {"version_code": 17, "version_name": "0.8.6-test", "status": "idle"},
+            "capabilities": {
+                "compatible": True,
+                "capabilities": ["ota.install", "ota.silent"],
+            },
+            "ota": {
+                "silent_install_ready": True,
+                "version_code": 17,
+                "version_name": "0.8.6-test",
+                "status": "idle",
+            },
         }
         self.hass = SimpleNamespace(
             data={DOMAIN: {"kiosks": {"tablet_a": self.kiosk}}},
@@ -93,8 +102,8 @@ class BrowserOtaTest(unittest.IsolatedAsyncioTestCase):
     async def test_update_entity_uses_uploaded_apk_and_build_order_for_same_version_name(
         self,
     ):
-        from custom_components.ha_gecko_kiosk.update import KioskUpdate
         from custom_components.ha_gecko_kiosk.entity import SPECS
+        from custom_components.ha_gecko_kiosk.update import KioskUpdate
 
         await self.manager.upload(
             Content(fixtures.apk_bytes(version_name="0.8.6-test"))
@@ -271,3 +280,67 @@ class BrowserOtaTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(raw, await response.read())
         finally:
             await runner.cleanup()
+
+    async def test_strict_silent_gate_and_explicit_legacy_opt_in(self):
+        await self.manager.upload(Content(fixtures.apk_bytes()))
+        with patch(
+            "custom_components.ha_gecko_kiosk.ota.mqtt.async_publish",
+            new_callable=AsyncMock,
+        ) as publish:
+            self.kiosk["capabilities"]["capabilities"] = ["ota.install"]
+            with self.assertRaisesRegex(HomeAssistantError, "0.8.9"):
+                await self.manager.install("tablet_a")
+            publish.assert_not_awaited()
+            await self.manager.install("tablet_a", require_silent=False)
+            command = json.loads(publish.call_args.args[2])
+            self.assertFalse(command["require_silent"])
+            import time
+
+            self.assertTrue(
+                530000 < command["expires_at_ms"] - time.time() * 1000 <= 540000
+            )
+            self.kiosk["ota"]["status"] = "idle"
+            self.kiosk["capabilities"]["capabilities"].append("ota.silent")
+            self.kiosk["ota"]["silent_install_ready"] = False
+            with self.assertRaisesRegex(HomeAssistantError, "Device Owner"):
+                await self.manager.install("tablet_a")
+            self.kiosk["ota"]["silent_install_ready"] = True
+            await self.manager.install("tablet_a")
+            command = json.loads(publish.call_args.args[2])
+            self.assertTrue(command["require_silent"])
+            self.assertTrue(
+                110000 < command["expires_at_ms"] - time.time() * 1000 <= 120000
+            )
+            self.assertTrue(
+                1790000
+                < command["download_expires_at_ms"] - time.time() * 1000
+                <= 1800000
+            )
+
+    async def test_silent_diagnostics_accept_only_typed_allowlisted_fields(self):
+        payload = {
+            "schema": 1,
+            "version_code": 20,
+            "version_name": "0.8.9-test",
+            "status": "silent_unavailable",
+            "detail": "silent_requires_setup",
+            "silent_install_ready": False,
+            "device_owner": False,
+            "android_api": 30,
+            "android_version": "10",
+            "install_method": "unavailable",
+            "download_http_status": 403,
+        }
+        self.manager.receive("tablet_a", json.dumps(payload))
+        self.assertEqual("silent_requires_setup", self.kiosk["ota"]["detail"])
+        self.assertEqual(403, self.kiosk["ota"]["download_http_status"])
+        payload.update(
+            silent_install_ready="true",
+            android_api=True,
+            install_method="https://private.invalid",
+            detail="https://private.invalid",
+        )
+        self.manager.receive("tablet_a", json.dumps(payload))
+        self.assertNotIn("silent_install_ready", self.kiosk["ota"])
+        self.assertNotIn("install_method", self.kiosk["ota"])
+        self.assertNotIn("detail", self.kiosk["ota"])

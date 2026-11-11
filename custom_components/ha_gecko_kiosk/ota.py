@@ -5,29 +5,28 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-from pathlib import Path
 import re
 import secrets
 import time
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 from aiohttp import web
 from homeassistant.components import mqtt
 from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.components.http.decorators import require_admin
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import callback
-from homeassistant.helpers.event import async_call_later
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_call_later
 
 from . import DOMAIN, _ensure_kiosk, _require_capability, _state, _valid_segment
 from .apk import ApkError, inspect_apk
-
 from .ota_artifact import (
-    Candidate,
-    MAX_ARCHIVE,
-    MAX_APK,
     ARTIFACT_NAME,
+    MAX_APK,
+    MAX_ARCHIVE,
+    Candidate,
     extract_verified_archive,
 )
 
@@ -39,7 +38,37 @@ ACTIVE = {
     "awaiting_confirmation",
     "installing",
 }
-STATUSES = ACTIVE | {"idle", "installed", "error", "cancelled"}
+STATUSES = ACTIVE | {"idle", "installed", "error", "cancelled", "silent_unavailable"}
+DOWNLOAD_TTL_SECONDS = 1800
+DETAIL_CODES = {
+    "download_failed",
+    "verification_failed",
+    "permission_required",
+    "installer_failed",
+    "interrupted",
+    "expired",
+    "cancelled",
+    "installed",
+    "silent_requires_setup",
+    "silent_user_action_required",
+    "download_redirected",
+    "download_unauthorized",
+    "download_not_found",
+    "download_http_error",
+    "download_wrong_content",
+    "download_size_mismatch",
+    "download_incomplete",
+    "download_expired",
+    "download_tls_failed",
+    "download_dns_failed",
+    "download_timeout",
+    "download_connection_failed",
+    "verify_invalid_apk",
+    "verify_package_mismatch",
+    "verify_version_mismatch",
+    "verify_hash_mismatch",
+    "verify_signer_mismatch",
+}
 
 
 class OtaDownloadView(HomeAssistantView):
@@ -128,12 +157,16 @@ class OtaInstallView(HomeAssistantView):
             value = await request.json()
             kiosk = value.get("kiosk") if isinstance(value, dict) else None
             upload_id = value.get("upload_id") if isinstance(value, dict) else None
+            require_silent = (
+                value.get("require_silent", True) if isinstance(value, dict) else True
+            )
             if (
                 not isinstance(kiosk, str)
                 or not _valid_segment(kiosk)
                 or len(kiosk) > 64
                 or not isinstance(upload_id, str)
                 or not re.fullmatch(r"[0-9a-f]{32}", upload_id)
+                or type(require_silent) is not bool
             ):
                 raise ValueError()
         except (ValueError, TypeError):
@@ -141,7 +174,9 @@ class OtaInstallView(HomeAssistantView):
                 {"message": "Kies een geldige kiosk en geüploade APK."}, status=400
             )
         try:
-            await manager.install(kiosk, upload_id=upload_id)
+            await manager.install(
+                kiosk, upload_id=upload_id, require_silent=require_silent
+            )
         except HomeAssistantError as error:
             return web.json_response({"message": str(error)}, status=400)
         return web.json_response({"status": "requested", "kiosk": kiosk}, status=202)
@@ -459,22 +494,22 @@ class OtaManager:
         finally:
             await self.hass.async_add_executor_job(stream.close)
 
-    async def install(self, kiosk_id, upload_id=None):
+    async def install(self, kiosk_id, upload_id=None, require_silent=True):
         if kiosk_id in self.pending_installs:
             raise HomeAssistantError(
                 "Er wordt al een update voor deze kiosk voorbereid."
             )
         self.pending_installs.add(kiosk_id)
         try:
-            await self._install(kiosk_id, upload_id)
+            await self._install(kiosk_id, upload_id, require_silent)
         finally:
             self.pending_installs.discard(kiosk_id)
 
-    async def _install(self, kiosk_id, upload_id=None):
+    async def _install(self, kiosk_id, upload_id=None, require_silent=True):
         if self.stopped:
             raise HomeAssistantError("OTA controller is unloading")
-        manifest = _state(self.hass).get(kiosk_id, {}).get("capabilities", {})
-        if not manifest.get("compatible") or "ota.install" not in manifest.get(
+        capabilities = _state(self.hass).get(kiosk_id, {}).get("capabilities", {})
+        if not capabilities.get("compatible") or "ota.install" not in capabilities.get(
             "capabilities", []
         ):
             raise HomeAssistantError(
@@ -484,6 +519,15 @@ class OtaManager:
         state = _state(self.hass).get(kiosk_id, {})
         if state.get("availability") != "online":
             raise HomeAssistantError("De kiosk is offline.")
+        if require_silent:
+            if "ota.silent" not in capabilities.get("capabilities", []):
+                raise HomeAssistantError(
+                    "Deze app ondersteunt nog geen stille OTA. Installeer eerst app 0.8.9 of nieuwer."
+                )
+            if state.get("ota", {}).get("silent_install_ready") is not True:
+                raise HomeAssistantError(
+                    "Stille installatie is nog niet beschikbaar op deze tablet. Configureer Device Owner of geschikte Android-installatierechten; er wordt geen bevestigingsvenster geopend."
+                )
         if state.get("ota", {}).get("status") in ACTIVE:
             raise HomeAssistantError("Er loopt al een update voor deze kiosk.")
         uploaded = self.uploaded
@@ -526,12 +570,22 @@ class OtaManager:
             "request_id": request_id,
             "token": grant,
             "path": path,
-            "expires": now + 600,
+            "expires": now + DOWNLOAD_TTL_SECONDS,
         }
         payload = {
             "schema": 1,
             "request_id": request_id,
-            "expires_at_ms": int(time.time() * 1000) + 120000,
+            # Old clients use this field as a download deadline too. Stay below
+            # their ten-minute validation cap; new clients get a separate deadline.
+            "expires_at_ms": int(time.time() * 1000)
+            + (
+                120000
+                if "ota.silent" in capabilities.get("capabilities", [])
+                else 540000
+            ),
+            "download_expires_at_ms": int(time.time() * 1000)
+            + DOWNLOAD_TTL_SECONDS * 1000,
+            "require_silent": require_silent,
             "download_path": f"/api/ha_gecko_kiosk/ota/{job_id}",
             "download_token": grant,
             "sha256": manifest["sha256"],
@@ -552,7 +606,9 @@ class OtaManager:
                 current.update(status="error", detail="timeout")
                 self.notify(kiosk_id)
 
-        self.expiry_timers.append(async_call_later(self.hass, 600, expired))
+        self.expiry_timers.append(
+            async_call_later(self.hass, DOWNLOAD_TTL_SECONDS, expired)
+        )
         state.setdefault("ota", {}).update(
             status="requested", progress=0, request_id=request_id
         )
@@ -600,17 +656,37 @@ class OtaManager:
                 r"[0-9a-f]{32}", value["request_id"]
             ):
                 clean["request_id"] = value["request_id"]
-            if value.get("detail") in {
-                "download_failed",
-                "verification_failed",
-                "permission_required",
-                "installer_failed",
-                "interrupted",
-                "expired",
-                "cancelled",
-                "installed",
-            }:
+            if value.get("detail") in DETAIL_CODES:
                 clean["detail"] = value["detail"]
+            for key in (
+                "device_owner",
+                "privileged_installer",
+                "silent_install_ready",
+                "user_action_requested",
+            ):
+                if type(value.get(key)) is bool:
+                    clean[key] = value[key]
+            if (
+                type(value.get("android_api")) is int
+                and 21 <= value["android_api"] <= 100
+            ):
+                clean["android_api"] = value["android_api"]
+            if isinstance(value.get("android_version"), str) and re.fullmatch(
+                r"[A-Za-z0-9._ -]{1,40}", value["android_version"]
+            ):
+                clean["android_version"] = value["android_version"]
+            if value.get("install_method") in {
+                "device_owner",
+                "privileged",
+                "self_update",
+                "unavailable",
+            }:
+                clean["install_method"] = value["install_method"]
+            if (
+                type(value.get("download_http_status")) is int
+                and 100 <= value["download_http_status"] <= 599
+            ):
+                clean["download_http_status"] = value["download_http_status"]
             state = _ensure_kiosk(self.hass, kiosk_id)
             previous = state.get("ota", {})
             # Reject a stale retained job snapshot while a new request is active.

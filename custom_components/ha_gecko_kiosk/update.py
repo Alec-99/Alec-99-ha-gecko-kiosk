@@ -62,6 +62,7 @@ class KioskUpdate(KioskEntity, UpdateEntity):
         if not self.ota.uploaded and self.ota.error:
             return "APK-bron niet bereikbaar; controleer de integratieopties."
         return {
+            "silent_unavailable": "Stille installatie is niet toegestaan door Android; er is geen bevestigingsvenster geopend. Controleer Device Owner en installatiebeleid.",
             "permission_required": "Sta op de tablet installatie door HA Gecko Kiosk toe en keer terug naar de app.",
             "awaiting_confirmation": "Bevestig de installatie op de tablet.",
             "error": "Update mislukt: "
@@ -81,8 +82,24 @@ class KioskUpdate(KioskEntity, UpdateEntity):
 
     @property
     def extra_state_attributes(self):
-        return {"ota_status": self.kiosk.get("ota", {}).get("status", "idle"),
-                "ota_detail": self.kiosk.get("ota", {}).get("detail", "")}
+        state = self.kiosk.get("ota", {})
+        attributes = {
+            "ota_status": state.get("status", "idle"),
+            "ota_detail": state.get("detail", ""),
+        }
+        for key in (
+            "android_api",
+            "android_version",
+            "device_owner",
+            "privileged_installer",
+            "install_method",
+            "silent_install_ready",
+            "download_http_status",
+            "user_action_requested",
+        ):
+            if key in state:
+                attributes[key] = state[key]
+        return attributes
 
     async def async_update(self):
         await self.ota.check()

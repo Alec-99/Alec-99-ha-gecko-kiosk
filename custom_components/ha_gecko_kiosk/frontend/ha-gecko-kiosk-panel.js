@@ -14,6 +14,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     this._message = "";
     this._messageKind = "info";
     this._otaUpload = null;
+    this._requireSilentOta = true;
     this._apkFile = null;
     this._uploading = false;
     this._uploadController = null;
@@ -322,8 +323,27 @@ class HaGeckoKioskPanel extends HTMLElement {
       installed: "Installatie voltooid.", cancelled: "Installatie geannuleerd.",
       error: "Update mislukt. Controleer de kiosk en probeer opnieuw.", idle: "Gereed voor een update.",
     };
-    if (state.status === "error") {
+    if (["error", "silent_unavailable"].includes(state.status)) {
       const errors = {
+        silent_requires_setup: "Stille OTA vereist Device Owner of geschikte Android-installatierechten. Er wordt geen bevestigingsvenster geopend.",
+        silent_user_action_required: "Android vraagt bevestiging; de stille update is gestopt zonder een venster te openen.",
+        download_unauthorized: "HA of de proxy weigert de download (HTTP 401/403). Controleer de toegangsregels voor de ingestelde HA-URL.",
+        download_not_found: "De APK-download is niet gevonden (HTTP 404). Vraag de update opnieuw aan.",
+        download_http_error: "HA of de proxy gaf een HTTP-fout terug bij het downloaden.",
+        download_redirected: "De HA-URL verwijst door. Gebruik op de tablet de rechtstreeks bereikbare, definitieve HA-URL.",
+        download_wrong_content: "De download bevat een web- of loginpagina in plaats van een APK. Controleer de proxy en HA-URL.",
+        download_tls_failed: "Het HTTPS-certificaat wordt niet vertrouwd door de tablet.",
+        download_dns_failed: "De tablet kan de hostnaam van Home Assistant niet vinden.",
+        download_connection_failed: "De tablet kan geen verbinding maken met Home Assistant.",
+        download_timeout: "De netwerkverbinding is tijdens de download verlopen.",
+        download_expired: "De downloadtermijn is verstreken. Vraag de update opnieuw aan.",
+        download_incomplete: "De APK is onvolledig ontvangen. Controleer de verbinding en probeer opnieuw.",
+        download_size_mismatch: "De ontvangen bestandsgrootte wijkt af van de APK.",
+        verify_hash_mismatch: "De inhoud van de ontvangen APK wijkt af (SHA-256). Upload het bestand opnieuw.",
+        verify_package_mismatch: "De APK hoort bij een andere app.",
+        verify_version_mismatch: "Het buildnummer van de APK komt niet overeen met de updateopdracht.",
+        verify_signer_mismatch: "De APK is met een andere sleutel ondertekend dan de geïnstalleerde app.",
+        verify_invalid_apk: "Android kan dit bestand niet als geldige APK lezen.",
         download_failed: "Downloaden of het voorbereiden van de installatie is mislukt. Controleer of de ingestelde HA-URL vanaf de tablet bereikbaar is.",
         verification_failed: "De APK-controle is mislukt: bestandsgrootte, hash, pakket, build of ondertekening wijkt af. Ook een proxy- of loginpagina kan deze fout veroorzaken.",
         installer_failed: "Android heeft de installatie niet kunnen uitvoeren. Controleer de installatierechten op de tablet.",
@@ -345,6 +365,10 @@ class HaGeckoKioskPanel extends HTMLElement {
     if (kiosk.capabilities?.compatible !== true || !kiosk.capabilities?.capabilities?.includes("ota.install"))
       return "Deze kiosk ondersteunt nog geen OTA. Installeer eerst één keer handmatig app 0.8.6 of nieuwer.";
     if (kiosk.availability !== "online") return "De kiosk is offline.";
+    if (this._requireSilentOta && !kiosk.capabilities.capabilities.includes("ota.silent"))
+      return "Stille OTA vereist app 0.8.9 of nieuwer. Installeer die eerst één keer handmatig.";
+    if (this._requireSilentOta && kiosk.ota?.silent_install_ready !== true)
+      return "Stille installatie is niet beschikbaar. Configureer Device Owner of geschikte Android-installatierechten.";
     if (["requested", "downloading", "verifying", "permission_required", "awaiting_confirmation", "installing"].includes(kiosk.ota?.status))
       return "Er loopt al een update voor deze kiosk.";
     if (!this._otaUpload) return "Upload eerst een APK.";
@@ -362,14 +386,17 @@ class HaGeckoKioskPanel extends HTMLElement {
       <p role="status" data-upload-status></p><progress data-upload-progress aria-label="APK uploaden en controleren" hidden></progress></div>
       <div class="control-group ota-group"><h3>Beschikbare update</h3><p data-ota-upload></p>
       <label class="field ota-field"><span>Kiosk</span><select data-ota-kiosk aria-label="Kiosk voor app-update">${this._kiosks.map(kiosk => `<option value="${this._escape(kiosk.id)}" ${kiosk.id === this._selectedKiosk ? "selected" : ""}>${this._escape(kiosk.id)}</option>`).join("")}</select></label>
-      <p class="muted" data-ota-current></p><button data-action="ota-install"></button><p class="muted" data-ota-blocked></p>
+      <p class="muted" data-ota-current></p><p class="muted" data-ota-environment></p>
+      <label><input type="checkbox" data-ota-silent checked> Zonder bevestiging op de tablet</label>
+      <p class="muted">Uitschakelen staat een bevestigingsvenster op de tablet toe.</p><button data-action="ota-install"></button><p class="muted" data-ota-blocked></p>
       <p class="notice" role="status" data-ota-status></p>
-      <p class="muted">Android controleert het pakket en de ondertekening. De tablet kan om installatiebevestiging vragen.</p></div></section>`;
+      <p class="muted">Android controleert het pakket en de ondertekening. Stille OTA stopt als Android bevestiging vereist.</p></div></section>`;
   }
 
   _updateOta() {
     const root = this.shadowRoot;
     if (!root.querySelector("[data-apk-file]")) return;
+    root.querySelector("[data-ota-silent]").onchange = event => { this._requireSilentOta = event.target.checked; this._updateOta(); };
     const kiosk = this._selected(), metadata = this._otaUpload;
     root.querySelector("[data-apk-filename]").textContent = this._apkFile ? this._apkFile.name : "Maximaal 256 MiB. Alleen een APK-bestand is nodig.";
     root.querySelector("[data-ota-upload]").textContent = metadata
@@ -387,6 +414,11 @@ class HaGeckoKioskPanel extends HTMLElement {
     picker.disabled = this._busy || !this._kiosks.length;
     root.querySelector("[data-ota-current]").textContent = kiosk
       ? `Geïnstalleerd: ${kiosk.ota?.version_name || kiosk.diagnostics?.app_version || "onbekend"}${Number.isInteger(kiosk.ota?.version_code) ? ` · build ${kiosk.ota.version_code}` : ""}` : "";
+    root.querySelector("[data-ota-silent]").checked = this._requireSilentOta;
+    root.querySelector("[data-ota-silent]").disabled = this._busy;
+    root.querySelector("[data-ota-environment]").textContent = Number.isInteger(kiosk?.ota?.android_api)
+      ? `Android ${kiosk.ota.android_version || ""} · API ${kiosk.ota.android_api} · Device Owner: ${kiosk.ota.device_owner ? "ja" : "nee"} · Stille OTA: ${kiosk.ota.silent_install_ready === true ? "beschikbaar" : "niet beschikbaar"}${kiosk.ota.download_http_status ? ` · HTTP ${kiosk.ota.download_http_status}` : ""}`
+      : "Android-installatierechten nog niet gerapporteerd door deze appversie.";
     const reason = this._otaBlockedReason(kiosk);
     root.querySelector("[data-ota-blocked]").textContent = reason;
     root.querySelector("[data-ota-status]").textContent = this._otaStatusText(kiosk);
@@ -436,7 +468,7 @@ class HaGeckoKioskPanel extends HTMLElement {
     try {
       const response = await this._hass.fetchWithAuth("/api/ha_gecko_kiosk/ota_install", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kiosk: kiosk.id, upload_id: this._otaUpload.upload_id }),
+        body: JSON.stringify({ kiosk: kiosk.id, upload_id: this._otaUpload.upload_id, require_silent: this._requireSilentOta }),
       });
       let result;
       try { result = await response.json(); } catch (_) { result = {}; }

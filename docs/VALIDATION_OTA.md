@@ -37,3 +37,11 @@ source/version binding, size and digest passed. No APK was copied into this repo
 The private Android CI separately passed 32 regression/verification tests and
 one installer handoff test, followed by a UI-confirmed real in-place emulator
 upgrade to a higher test version, app restart and `installed` status.
+
+
+Integration 0.6.0: 27 pure protocol/APK tests, 16 real-HA runtime contracts and
+26 frontend tests include strict silent gating, typed platform diagnostics,
+explicit legacy opt-in and separate command/download deadlines. Device Owner
+installation is exercised in the Android application's separate emulator CI;
+this integration suite uses synthetic MQTT clients and does not prove a physical
+tablet's privileges or cross-network reachability.

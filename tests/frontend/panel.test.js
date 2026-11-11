@@ -375,8 +375,8 @@ test('polling retains navigation focus and scroll positions in a scrolling HA co
 
 
 function otaDevice(id = 'alpha', version = 17) {
-  const device = kiosk(id, 'online', { compatible: true, capabilities: ['ota.install'] });
-  device.ota = { status: 'idle', version_code: version, version_name: '0.8.6-test', progress: 0 };
+  const device = kiosk(id, 'online', { compatible: true, capabilities: ['ota.install', 'ota.silent'] });
+  device.ota = { silent_install_ready: true, status: 'idle', version_code: version, version_name: '0.8.6-test', progress: 0 };
   return device;
 }
 
@@ -411,7 +411,7 @@ test('APK upload uses HA authentication, reads metadata and installs only after 
   assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
   await click('[data-action="ota-install"]');
   assert.equal(requests[1][0], '/api/ha_gecko_kiosk/ota_install');
-  assert.deepEqual(JSON.parse(requests[1][1].body), { kiosk: 'alpha', upload_id: 'a'.repeat(32) });
+  assert.deepEqual(JSON.parse(requests[1][1].body), { kiosk: 'alpha', upload_id: 'a'.repeat(32), require_silent: true });
   assert.equal(calls.length, 0, 'No legacy service should bypass the upload selection');
   assert.match(panel.shadowRoot.textContent, /Update aangevraagd/);
 });
@@ -495,4 +495,22 @@ test('unknown OTA error text is not reflected in the update message', async () =
   await click('[data-tab="updates"]');
   assert.doesNotMatch(panel.shadowRoot.querySelector('[data-ota-status]').textContent, /private|<img/);
   assert.equal(panel.shadowRoot.querySelector('[data-ota-status] img'), null);
+});
+
+
+test('silent OTA blocks older clients and missing rights; interactive mode requires explicit opt-in', async () => {
+  const device = otaDevice();
+  device.capabilities.capabilities = ['ota.install'];
+  setup([device]); panel._otaUpload = uploadMetadata();
+  await click('[data-tab="updates"]');
+  assert.equal(panel.shadowRoot.querySelector('[data-ota-silent]').checked, true);
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, true);
+  device.capabilities.capabilities.push('ota.silent'); device.ota.silent_install_ready = false;
+  panel._updateOta();
+  assert.match(panel.shadowRoot.querySelector('[data-ota-blocked]').textContent, /Device Owner/);
+  const toggle = panel.shadowRoot.querySelector('[data-ota-silent]');
+  toggle.checked = false; toggle.dispatchEvent(new dom.window.Event('change'));
+  assert.equal(panel.shadowRoot.querySelector('[data-action="ota-install"]').disabled, false);
+  let body; panel._hass.fetchWithAuth = async (_path, options) => { body = JSON.parse(options.body); return {ok: true, json: async () => ({})}; };
+  await panel._installApk(); assert.equal(body.require_silent, false);
 });

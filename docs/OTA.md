@@ -7,9 +7,9 @@ an optional alternative.
 
 ## Browser upload
 
-1. Manually install the first OTA-capable Android build (Gecko 0.8.6+) using the
-   same signing key as the installed app. Existing OTA-capable installations do
-   not need a new Android build for this browser upload feature.
+1. For unattended updates, install Gecko 0.8.9+ once with the same signing key
+   and configure Android installation rights (see below). Older OTA clients
+   (0.8.6+) support only explicitly opted-in interactive installation.
 2. Update the HA integration, restart HA, and open **Gecko-kiosken → App-updates**.
 3. Choose the `.apk` file and press **APK uploaden**. HA reads the actual package,
    version name and Android build number from the APK's binary manifest, computes
@@ -18,9 +18,10 @@ an optional alternative.
    client, a reported installed build number and a strictly higher uploaded build.
    The request is bound to the uploaded artifact ID so a concurrent replacement
    cannot silently substitute another file.
-5. Follow progress in the same panel or the kiosk's **App-update** entity. If
-   requested, allow Android installation by this app, return to the kiosk and
-   confirm Android's installation prompt.
+5. Leave **Zonder bevestiging op de tablet** enabled for remote installation.
+   HA blocks unsupported clients or missing rights. Follow progress in the panel
+   or **App-update** entity. Disable the checkbox only when deliberately allowing
+   interactive Android settings/confirmation, for example during initial setup.
 
 Both upload and install endpoints require an authenticated HA administrator.
 Wrong apps, corrupt manifests, unsupported versions, oversized archives and
@@ -40,9 +41,10 @@ Admin upload API: `POST /api/ha_gecko_kiosk/ota_upload`, with the raw APK body a
 Content-Type `application/vnd.android.package-archive` or `application/octet-stream`.
 The 201 response contains `upload_id`, `version_name`, `version_code` and `size`.
 An admin explicitly starts installation with `POST /api/ha_gecko_kiosk/ota_install`
-and JSON `{"kiosk":"tablet_a","upload_id":"<uploaded ID>"}`. The existing admin
+and JSON `{"kiosk":"tablet_a","upload_id":"<uploaded ID>","require_silent":true}`. The existing admin
 WebSocket list exposes `ota_upload` metadata for the panel, without file paths or
-credentials. The device download grant and MQTT protocol below are unchanged.
+credentials. Omitting `require_silent` defaults to true; only an explicit false
+permits interactive installation. The HA update entity always requires silent OTA.
 
 ## Historical debug APK signing
 
@@ -121,6 +123,8 @@ HA publishes QoS 1, **not retained**, to `ha_kiosk/<id>/command/ota`:
   "schema": 1,
   "request_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "expires_at_ms": 2000000000000,
+  "download_expires_at_ms": 2000001680000,
+  "require_silent": true,
   "download_path": "/api/ha_gecko_kiosk/ota/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "download_token": "EXAMPLE_SCOPED_ARTIFACT_GRANT_REPLACE_ME",
   "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
@@ -132,8 +136,10 @@ HA publishes QoS 1, **not retained**, to `ha_kiosk/<id>/command/ota`:
 
 The grant is an artifact-only bearer credential, not a HA login or GitHub token.
 It is sent in the download Authorization header, never in a query string.
-It grants this APK for ten minutes and is invalidated by integration unload or
-HA restart. MQTT accepts the install request for two minutes. Android rejects
+It grants this APK for thirty minutes and is invalidated by integration unload or
+HA restart. New clients accept the install request for two minutes, with a separate thirty-minute
+download deadline. Legacy interactive clients use a nine-minute command/download
+deadline, below their ten-minute validation ceiling. Android rejects
 retained requests, duplicate request IDs, older/equal version codes, foreign
 paths, redirects, invalid content/hash/package and different signing keys.
 The most recent request ID and staging metadata are persisted locally, without
@@ -144,21 +150,21 @@ The kiosk publishes retained `ha_kiosk/<id>/ota/state` with schema 1,
 `version_code`, `version_name`, `status`, `progress` (0–100), optional request ID
 and an allowlisted detail code. Statuses: `idle`, `downloading`, `verifying`,
 `permission_required`, `awaiting_confirmation`, `installing`, `installed`,
-`cancelled`, `error`; HA also uses `requested`. Source credentials, download
+`cancelled`, `error`, `silent_unavailable`; HA also uses `requested`. Source credentials, download
 grants, raw installer exceptions and URLs are excluded from this state.
 HA rejects stale retained job snapshots while a new request is active.
 
 ## Limits
 
 No scheduled automatic installation, backup/rollback, arbitrary URL installation,
-channel publishing or bypass of Android confirmation. Configuring a trusted
+channel publishing or bypass of Android installation policy. Configuring a trusted
 branch authorizes its successful build artifacts as update candidates. Choose a
 branch whose code you trust. A matching debug signing key remains essential;
-losing a cached signing key breaks in-place updates.
+losing the signing key breaks in-place updates.
 
 Android may require Open on its installer screen if background relaunch is
 restricted. Permission/confirmation waits remain visible in HA; rejecting the
-Android prompt reports cancellation. Lost requests/downloads time out after ten
+Android prompt reports cancellation. Lost requests/downloads time out after thirty
 minutes. A HA restart invalidates outstanding HTTP grants; retry after the
 client reports its interrupted download. Physical tablet installation remains a
 separate check from emulator validation.
@@ -182,3 +188,29 @@ whether the client reported `download_failed`, `verification_failed` or
 Early app builds used broad failure codes, including some installer-preparation
 errors under `download_failed`. A verification error can also mean a proxy/login
 page was returned instead of the APK, not only a signing mismatch.
+
+
+## Unattended installation rights (integration 0.6.0 / app 0.8.9)
+
+Android 10/11 requires Device Owner or privileged INSTALL_PACKAGES permission for
+unattended updates. Activating the ordinary device-administrator checkbox is not
+sufficient. Device Owner is a one-time managed-device provisioning step; existing
+accounts or another owner can prevent it. Do not factory-reset a tablet merely to
+try OTA without preserving its configuration and choosing a provisioning method.
+
+Android 12+ also supports self-updates under platform conditions, including the
+app target SDK and install permissions. The app requests no user action, but stops
+with `silent_unavailable` if Android still requires it. It never launches that
+confirmation or unknown-source settings in strict mode. No su/root prompt is used.
+
+The app reports `android_api`, `android_version`, `device_owner`,
+`privileged_installer`, `install_method`, `silent_install_ready`,
+`download_http_status` and `user_action_requested`; these also appear on the HA
+update entity. Readiness reflects platform checks, not a guarantee that a particular
+APK will be accepted. The app validates the actual APK target SDK before committing.
+
+New error codes distinguish HTTP authorization, redirects, login content, TLS/DNS,
+connection/timeout, incomplete download and APK hash/package/version/signer checks.
+Older clients retain their broader error codes. The new 30-minute download deadline
+fixes the old two-minute whole-file limit; it does not establish the cause of an
+individual user's error without the reported detail code.
